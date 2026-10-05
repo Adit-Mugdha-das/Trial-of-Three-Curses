@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <random>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -156,6 +157,7 @@ void Scene::build()
     buildTreasure();
     buildAnubisStatue();
     buildCorridor();
+    buildCeilingWork();
 
     m_root->updateWorld();
 }
@@ -1327,14 +1329,41 @@ void Scene::update(float time, float deltaTime)
     }
 
     // Torch flames flicker in size; Phase 4 ties light intensity to this.
-    for (SceneNode* torch : { torchLeft, torchRight })
+    // The collapse's torchPower shrinks and dims them on top, down to
+    // nothing once a torch has been put out.
+    auto powerOf = [this](int id)
     {
-        if (torch == nullptr) { continue; }
+        return (id >= 0 && id < static_cast<int>(torchPower.size())) ? torchPower[id] : 1.0f;
+    };
+    auto dressFlame = [&](SceneNode* flame, const glm::vec3& baseScale, float power)
+    {
+        flame->scale    = baseScale * (0.35f + 0.65f * power);
+        flame->visible  = power > 0.03f;
+        flame->material.emissive = kFlame.emissive * (0.25f + 0.75f * power);
+    };
 
-        if (SceneNode* flame = torch->find("Flame"))
+    {
+        int id = 0;
+        for (SceneNode* torch : { torchLeft, torchRight })
         {
-            const float f = 1.0f + 0.10f * std::sin(time * 9.0f + torch->position.x);
-            flame->scale = { 0.42f * f, 0.6f * f, 0.42f * f };
+            if (torch != nullptr)
+            {
+                if (SceneNode* flame = torch->find("Flame"))
+                {
+                    const float f = 1.0f + 0.10f * std::sin(time * 9.0f + torch->position.x);
+                    dressFlame(flame, glm::vec3(0.42f, 0.6f, 0.42f) * f, powerOf(id));
+                }
+            }
+            ++id;
+        }
+
+        for (std::size_t i = 0; i < corridorTorches.size(); ++i)
+        {
+            if (SceneNode* flame = corridorTorches[i]->find("Flame"))
+            {
+                dressFlame(flame, { 0.36f, 0.52f, 0.36f },
+                           powerOf(Collapse::kChamberTorches + static_cast<int>(i)));
+            }
         }
     }
 
@@ -1399,12 +1428,17 @@ void Scene::updateLights(float time)
 
     // --- two warm torch point lights ---------------------------------------
     // Anchored to the flame nodes, so they inherit any movement for free.
+    int chamberTorchId = -1;
     for (SceneNode* torch : { torchLeft, torchRight })
     {
+        ++chamberTorchId;
         if (torch == nullptr) { continue; }
 
         SceneNode* flame = torch->find("Flame");
         if (flame == nullptr) { continue; }
+
+        const float power = torchPower[chamberTorchId];
+        if (power < 0.02f) { continue; }
 
         Light torchLight;
         torchLight.type      = LightType::Point;
@@ -1414,9 +1448,10 @@ void Scene::updateLights(float time)
         // Two summed sines at unrelated frequencies read as an irregular
         // flicker; a single sine reads as a mechanical pulse.
         const float seed = torch->position.x;
-        torchLight.intensity = 2.5f
-                             + 0.30f * std::sin(time * 8.3f + seed)
-                             + 0.16f * std::sin(time * 19.7f + seed * 2.0f);
+        torchLight.intensity = (2.5f
+                                + 0.30f * std::sin(time * 8.3f + seed)
+                                + 0.16f * std::sin(time * 19.7f + seed * 2.0f))
+                             * power;
 
         torchLight.constant  = 1.0f;
         torchLight.linear    = 0.07f;
@@ -1528,6 +1563,7 @@ void Scene::updateLights(float time)
         // and a budget of two, repeatedly taking the nearest is cheaper and
         // allocates nothing.
         std::vector<const SceneNode*> chosen;
+        std::vector<float> chosenPower;
         std::vector<bool> used(corridorTorches.size(), false);
 
         for (int pick = 0; pick < kCorridorTorchBudget; ++pick)
@@ -1538,6 +1574,10 @@ void Scene::updateLights(float time)
             for (std::size_t i = 0; i < corridorTorches.size(); ++i)
             {
                 if (used[i]) { continue; }
+
+                // A torch that has been put out lights nothing; spend the
+                // budget on the next lit one instead.
+                if (torchPower[Collapse::kChamberTorches + i] < 0.05f) { continue; }
 
                 const glm::vec3 d = corridorTorches[i]->worldPosition() - listener;
                 const float d2 = glm::dot(d, d);
@@ -1552,10 +1592,12 @@ void Scene::updateLights(float time)
             if (best < 0) { break; }
             used[best] = true;
             chosen.push_back(corridorTorches[best]);
+            chosenPower.push_back(torchPower[Collapse::kChamberTorches + best]);
         }
 
-        for (const SceneNode* torch : chosen)
+        for (std::size_t c = 0; c < chosen.size(); ++c)
         {
+            const SceneNode* torch = chosen[c];
             const SceneNode* flame = const_cast<SceneNode*>(torch)->find("Flame");
             if (flame == nullptr) { continue; }
 
@@ -1565,9 +1607,10 @@ void Scene::updateLights(float time)
             light.color    = { 1.0f, 0.55f, 0.22f };
 
             const float seed = torch->position.z;
-            light.intensity = 2.2f
-                            + 0.28f * std::sin(time * 7.9f + seed)
-                            + 0.14f * std::sin(time * 17.3f + seed * 2.0f);
+            light.intensity = (2.2f
+                               + 0.28f * std::sin(time * 7.9f + seed)
+                               + 0.14f * std::sin(time * 17.3f + seed * 2.0f))
+                            * chosenPower[c];
 
             light.constant  = 1.0f;
             light.linear    = 0.08f;
@@ -1639,6 +1682,260 @@ void Scene::updateLights(float time)
     fill.color     = { 0.30f, 0.36f, 0.62f };
     fill.intensity = 0.22f;
     lights.push_back(fill);
+}
+
+void Scene::buildCeilingWork()
+{
+    // --- what can fall ---------------------------------------------------------
+    // The same list main and the tests use, so the blocks that are drawn are
+    // exactly the blocks that are simulated.
+    const std::vector<Collapse::Spec> layout = Collapse::standardLayout();
+
+    Material blockMaterial = kStone;
+    blockMaterial.uvScale = { 2.0f, 0.6f };
+
+    // Anything a falling section or its staying half already occupies is left
+    // out of the static masonry, or there would be two blocks in one place.
+    auto occupied = [&layout](const glm::vec3& centre)
+    {
+        for (const Collapse::Spec& spec : layout)
+        {
+            if (glm::length(spec.home - centre) < 0.5f) { return true; }
+            if (spec.hasCompanion && glm::length(spec.companionHome - centre) < 0.5f)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // --- the chamber's cornice ---------------------------------------------------
+    // A ledge of blocks round the top of the walls. It gives the chamber a
+    // structure that can visibly fail - before, the walls simply stopped.
+    // Only 2 deep at the front and sides and 1.2 at the back, where the
+    // statue's ears come up close to the wall.
+    SceneNode* cornice = m_root->createChild("Cornice");
+    constexpr float kLedgeY = 7.6f;
+    constexpr float kLedgeH = 0.7f;
+    constexpr float kGap    = 0.05f;
+
+    auto ledgeRow = [&](float from, float to, int pieces, bool alongX,
+                        float across, float depth)
+    {
+        const float step = (to - from) / static_cast<float>(pieces);
+        for (int k = 0; k < pieces; ++k)
+        {
+            const float along = from + step * (static_cast<float>(k) + 0.5f);
+            const glm::vec3 centre = alongX ? glm::vec3(along, kLedgeY, across)
+                                            : glm::vec3(across, kLedgeY, along);
+            if (occupied(centre)) { continue; }
+
+            const glm::vec3 size = alongX ? glm::vec3(step - kGap, kLedgeH, depth)
+                                          : glm::vec3(depth, kLedgeH, step - kGap);
+            add(cornice, "CorniceBlock", &m_cube, centre, size, blockMaterial);
+        }
+    };
+
+    ledgeRow(-12.7f, 12.7f, 7, true,  10.2f, 2.0f);   // front, over the doorway
+    ledgeRow(-10.7f,  9.2f, 5, false, -11.7f, 2.0f);  // left
+    ledgeRow(-10.7f,  9.2f, 5, false,  11.7f, 2.0f);  // right
+    ledgeRow(-10.7f, 10.7f, 6, true, -10.1f, 1.2f);   // back
+
+    // --- the corridor's ceiling beams --------------------------------------------
+    // Cross-beams under the ceiling, midway between the pillars. The ones that
+    // break are built below in two halves instead.
+    SceneNode* beams = m_root->createChild("CeilingBeams");
+    for (int k = 0; k < 8; ++k)
+    {
+        const float z = 16.5f + 7.0f * static_cast<float>(k);
+        bool breaks = false;
+        for (const Collapse::Spec& spec : layout)
+        {
+            if (spec.hingeAlongZ && std::fabs(spec.home.z - z) < 0.5f) { breaks = true; }
+        }
+        if (breaks) { continue; }
+
+        add(beams, "CeilingBeam", &m_cube, { 0.0f, 6.7f, z },
+            { Tuning::kCorridorHalfWidth * 2.0f, 0.6f, 1.0f }, blockMaterial);
+    }
+
+    // --- the sections that fall ----------------------------------------------------
+    for (std::size_t i = 0; i < layout.size(); ++i)
+    {
+        const Collapse::Spec& spec = layout[i];
+        CollapsePiece piece;
+
+        // A mesh-less parent, posed by the collapse. The block hangs off it
+        // as a child so the cracks are not stretched by the block's scale.
+        piece.node = m_root->createChild("CeilingSection");
+        piece.node->position = spec.home;
+        add(piece.node, "Block", &m_cube, { 0.0f, 0.0f, 0.0f }, spec.size, blockMaterial);
+        addCracks(piece.node, spec.size, static_cast<int>(i) * 2, piece.cracks);
+
+        if (spec.hasCompanion)
+        {
+            piece.companion = m_root->createChild("CeilingSectionStays");
+            piece.companion->position = spec.companionHome;
+            add(piece.companion, "Block", &m_cube, { 0.0f, 0.0f, 0.0f },
+                spec.companionSize, blockMaterial);
+            addCracks(piece.companion, spec.companionSize,
+                      static_cast<int>(i) * 2 + 1, piece.companionCracks);
+        }
+
+        m_collapsePieces.push_back(piece);
+    }
+}
+
+void Scene::addCracks(SceneNode* parent, const glm::vec3& size, int seed,
+                      std::vector<Crack>& out)
+{
+    // Thin dark slivers laid on the underside and on the -Z face, the two
+    // faces the chase camera sees as he runs at them. They start at zero
+    // length and grow, one after another, as the section cracks.
+    Material crackMaterial;
+    crackMaterial.ka = { 0.01f, 0.01f, 0.01f };
+    crackMaterial.kd = { 0.03f, 0.025f, 0.02f };
+    crackMaterial.ks = { 0.0f, 0.0f, 0.0f };
+    crackMaterial.shininess = 4.0f;
+
+    std::mt19937 rng(9001u + static_cast<unsigned>(seed) * 977u);
+    auto random = [&rng](float low, float high)
+    {
+        std::uniform_real_distribution<float> dist(low, high);
+        return dist(rng);
+    };
+
+    const glm::vec3 h = size * 0.5f;
+    const bool alongX = size.x >= size.z;
+    const float lengthHalf = alongX ? h.x : h.z;
+    const float widthHalf  = alongX ? h.z : h.x;
+
+    struct Segment { glm::vec3 a, b; bool onFace; };
+    std::vector<Segment> segments;
+
+    // Underside: a zigzag down the long axis, with two branches off it.
+    const float under = -h.y - 0.012f;
+    auto onUnderside = [&](float along, float lateral)
+    {
+        return alongX ? glm::vec3(along, under, lateral) : glm::vec3(lateral, under, along);
+    };
+
+    glm::vec3 points[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        const float along = -0.85f * lengthHalf + 1.7f * lengthHalf * static_cast<float>(k) / 3.0f;
+        points[k] = onUnderside(along, random(-0.6f, 0.6f) * widthHalf);
+    }
+    for (int k = 0; k < 3; ++k) { segments.push_back({ points[k], points[k + 1], false }); }
+
+    for (int k = 1; k <= 2; ++k)
+    {
+        const float lateral = (k == 1 ? 1.0f : -1.0f) * random(0.5f, 0.85f) * widthHalf;
+        const float along = random(-0.35f, 0.35f) * lengthHalf;
+        const glm::vec3 p = points[k];
+        const glm::vec3 offset = alongX ? glm::vec3(along, 0.0f, lateral)
+                                        : glm::vec3(lateral, 0.0f, along);
+        segments.push_back({ p, p + offset * 0.6f, false });
+    }
+
+    // The -Z face: two cracks running down from the top edge.
+    const float face = -h.z - 0.012f;
+    for (int k = 0; k < 2; ++k)
+    {
+        const float x0 = random(-0.7f, 0.7f) * h.x;
+        const glm::vec3 top(x0, h.y * 0.95f, face);
+        const glm::vec3 mid(x0 + random(-0.3f, 0.3f), random(-0.2f, 0.2f) * h.y, face);
+        const glm::vec3 bottom(mid.x + random(-0.3f, 0.3f), -h.y * 0.95f, face);
+        segments.push_back({ top, mid, true });
+        segments.push_back({ mid, bottom, true });
+    }
+
+    const float n = static_cast<float>(segments.size());
+    for (std::size_t k = 0; k < segments.size(); ++k)
+    {
+        const Segment& seg = segments[k];
+        const glm::vec3 d = seg.b - seg.a;
+        const float length = glm::length(d);
+        if (length < 1e-3f) { continue; }
+
+        Crack crack;
+        crack.start = seg.a;
+        crack.direction = d / length;
+        crack.length = length;
+        crack.threshold = 0.6f * static_cast<float>(k) / n;
+
+        crack.node = add(parent, "Crack", &m_cube, seg.a, { 0.001f, 0.001f, 0.001f },
+                         crackMaterial);
+        if (seg.onFace)
+        {
+            crack.node->rotation = { 0.0f, 0.0f, glm::degrees(std::atan2(d.y, d.x)) };
+            crack.node->scale    = { 0.001f, 0.10f, 0.025f };
+        }
+        else
+        {
+            crack.node->rotation = { 0.0f, glm::degrees(std::atan2(-d.z, d.x)), 0.0f };
+            crack.node->scale    = { 0.001f, 0.025f, 0.10f };
+        }
+        crack.node->visible = false;
+
+        out.push_back(crack);
+    }
+}
+
+void Scene::growCracks(std::vector<Crack>& cracks, float level)
+{
+    for (Crack& crack : cracks)
+    {
+        const float g = Easing::clamp01((level - crack.threshold) / 0.3f);
+        crack.node->visible = g > 0.02f;
+
+        // Grows from its start point, so it reads as a crack running
+        // across the stone rather than a line fading in.
+        const float length = std::max(0.001f, crack.length * g);
+        crack.node->scale.x  = length;
+        crack.node->position = crack.start + crack.direction * (length * 0.5f);
+    }
+}
+
+void Scene::applyCollapse(const Collapse& collapse, float time)
+{
+    const int n = std::min(collapse.count(), static_cast<int>(m_collapsePieces.size()));
+    for (int i = 0; i < n; ++i)
+    {
+        CollapsePiece& piece = m_collapsePieces[i];
+
+        piece.node->position = collapse.position(i);
+        piece.node->rotation = collapse.rotation(i);
+        growCracks(piece.cracks, collapse.crack(i));
+
+        if (piece.companion != nullptr)
+        {
+            piece.companion->position = collapse.companionPosition(i);
+            piece.companion->rotation = collapse.companionRotation(i);
+            growCracks(piece.companionCracks, collapse.crack(i));
+        }
+    }
+
+    for (int t = 0; t < static_cast<int>(torchPower.size()); ++t)
+    {
+        torchPower[t] = collapse.torchLevel(t, time);
+    }
+}
+
+glm::vec3 Scene::torchFlamePosition(int torch) const
+{
+    SceneNode* holder = nullptr;
+    if (torch == 0)      { holder = torchLeft; }
+    else if (torch == 1) { holder = torchRight; }
+    else if (torch - Collapse::kChamberTorches < static_cast<int>(corridorTorches.size())
+             && torch >= Collapse::kChamberTorches)
+    {
+        holder = corridorTorches[torch - Collapse::kChamberTorches];
+    }
+
+    if (holder == nullptr) { return glm::vec3(0.0f); }
+    if (SceneNode* flame = holder->find("Flame")) { return flame->worldPosition(); }
+    return holder->worldPosition();
 }
 
 void Scene::fadeCoverBetween(const glm::vec3& eye, const glm::vec3& target,

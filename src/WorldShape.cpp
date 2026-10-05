@@ -3,17 +3,78 @@
 #include <algorithm>
 #include <cmath>
 
-void WorldShape::addObstacle(float x, float z, float radius)
+int WorldShape::addObstacle(float x, float z, float radius, bool active, bool rubble)
 {
     if (obstacleCount >= kMaxObstacles)
     {
-        return;
+        return -1;
     }
 
     obstacles[obstacleCount].x      = x;
     obstacles[obstacleCount].z      = z;
     obstacles[obstacleCount].radius = radius;
-    ++obstacleCount;
+    obstacles[obstacleCount].active = active;
+    obstacles[obstacleCount].rubble = rubble;
+    return obstacleCount++;
+}
+
+glm::vec3 WorldShape::avoidRubble(const glm::vec3& position, const glm::vec3& desired,
+                                  float radius, float lookAhead) const
+{
+    auto hitsRubble = [&](const glm::vec3& direction)
+    {
+        for (int i = 0; i < obstacleCount; ++i)
+        {
+            const Obstacle& o = obstacles[i];
+            if (!o.active || !o.rubble) { continue; }
+
+            // Closest point of the probe to the circle's centre.
+            const float wx = o.x - position.x;
+            const float wz = o.z - position.z;
+            const float along = std::clamp(wx * direction.x + wz * direction.z,
+                                           0.0f, lookAhead);
+            const float cx = position.x + direction.x * along - o.x;
+            const float cz = position.z + direction.z * along - o.z;
+            const float reach = o.radius + radius;
+            if (cx * cx + cz * cz < reach * reach) { return true; }
+        }
+        return false;
+    };
+
+    // Heading out of the walkable area is no way round either.
+    auto leavesWorld = [&](const glm::vec3& direction)
+    {
+        const glm::vec3 end = position + direction * lookAhead;
+        if (end.z > gateZ) { return std::fabs(end.x) > corridorHalfWidth - radius; }
+        return end.x < roomMinX + radius || end.x > roomMaxX - radius;
+    };
+
+    // Nothing fallen in the way: go exactly where asked. Walls only matter
+    // when choosing a way round, so without rubble this changes nothing.
+    if (!hitsRubble(desired)) { return desired; }
+
+    // Turn a little at a time, trying both ways at each step, and take the
+    // first clear heading: the smallest detour that works.
+    for (float degrees = 20.0f; degrees <= 140.0f; degrees += 20.0f)
+    {
+        for (float sign : { 1.0f, -1.0f })
+        {
+            const float a = glm::radians(degrees * sign);
+            const glm::vec3 turned(desired.x * std::cos(a) + desired.z * std::sin(a),
+                                   0.0f,
+                                   -desired.x * std::sin(a) + desired.z * std::cos(a));
+            if (!hitsRubble(turned) && !leavesWorld(turned)) { return turned; }
+        }
+    }
+    return desired;
+}
+
+void WorldShape::setObstacleActive(int index, bool active)
+{
+    if (index >= 0 && index < obstacleCount)
+    {
+        obstacles[index].active = active;
+    }
 }
 
 void WorldShape::collide(glm::vec3& position, glm::vec3& velocity,
@@ -54,6 +115,10 @@ void WorldShape::collide(glm::vec3& position, glm::vec3& velocity,
     for (int i = 0; i < obstacleCount; ++i)
     {
         const Obstacle& prop = obstacles[i];
+        if (!prop.active)
+        {
+            continue;
+        }
 
         const float dx = position.x - prop.x;
         const float dz = position.z - prop.z;

@@ -11,6 +11,7 @@
 #include "CameraDirector.h"
 #include "Debris.h"
 #include "Gaze.h"
+#include "Collapse.h"
 #include "Hud.h"
 #include "EscapeTuning.h"
 #include "ParticleSystem.h"
@@ -62,6 +63,28 @@ namespace
     {
         if (p.y < 0.7f) { return false; }              // through the floor
 
+        // In the thickness of the front wall, anywhere but the open doorway.
+        // The chase camera rides at about 5 high and the doorway is only 5
+        // tall, so following him through it used to put the camera inside
+        // the lintel for a moment - a frame of solid brown.
+        if (std::fabs(p.z - Tuning::kGateZ) < 0.6f
+            && (p.y > 4.8f || std::fabs(p.x) > 3.3f))
+        {
+            return false;
+        }
+
+        // Following him out through the doorway: until the camera is through
+        // it, it has to stay below the lintel, or the wall above the door
+        // fills the whole screen for the moment he passes under it. Only when
+        // what it is looking at is already at the door - the overview shots
+        // that look down into the chamber from above are left alone.
+        if (subject.z > Tuning::kGateZ - 1.0f
+            && p.z > Tuning::kGateZ - 3.0f && p.z < Tuning::kGateZ + 0.6f
+            && p.y > 4.5f)
+        {
+            return false;
+        }
+
         // Inside a pillar means looking out at the back of its faces. Pulling
         // the camera toward its subject until it is clear reads as it easing
         // past an obstruction.
@@ -90,12 +113,16 @@ namespace
         if (p.z <= 11.0f)
         {
             // The chamber has no ceiling, so looking down from high up is
-            // fine; only the walls and floor constrain it.
-            return std::fabs(p.x) <= 12.2f && p.z >= -10.2f;
+            // fine; only the walls, the floor and the cornice of blocks round
+            // the top of the walls constrain it.
+            const bool inCornice = p.y > 7.0f && p.y < 8.2f
+                                && (std::fabs(p.x) > 10.4f || p.z > 8.9f || p.z < -9.2f);
+            return std::fabs(p.x) <= 12.2f && p.z >= -10.2f && !inCornice;
         }
 
         // The corridor is enclosed, so the ceiling matters here.
-        return std::fabs(p.x) <= 3.9f && p.y <= 6.8f && p.z <= 73.0f;
+        // The cross-beams hang down to 6.4.
+        return std::fabs(p.x) <= 3.9f && p.y <= 6.2f && p.z <= 73.0f;
     }
 
     // Pulls an orbit camera in along its own view ray until it is back
@@ -327,6 +354,28 @@ int main()
                   << ") radius " << prop.radius << std::endl;
     }
 
+    // The ceiling sections that can fall. Where each one will lie is known
+    // up front, so its floor circles are registered now, switched off, and
+    // switched on the moment it lands - for Medusa as much as for him.
+    Collapse collapse;
+    for (const Collapse::Spec& spec : Collapse::standardLayout())
+    {
+        collapse.add(spec);
+    }
+    collapse.reset();
+
+    std::vector<std::vector<int>> collapsePlayerIds(collapse.count());
+    std::vector<std::vector<int>> collapseWorldIds(collapse.count());
+    for (int i = 0; i < collapse.count(); ++i)
+    {
+        for (const Collapse::Circle& c : collapse.footprint(i))
+        {
+            collapsePlayerIds[i].push_back(player.addObstacle(c.x, c.z, c.radius, false, true));
+            collapseWorldIds[i].push_back(world.addObstacle(c.x, c.z, c.radius, false, true));
+        }
+    }
+    std::cout << "[Collapse] " << collapse.count() << " ceiling sections ready" << std::endl;
+
     // Where she rests between runs, captured before anything moves her.
     const glm::vec3 medusaHome =
         (scene.medusaRoot != nullptr) ? scene.medusaRoot->position
@@ -337,6 +386,16 @@ int main()
     Pursuer pursuer;
     pursuer.setWorld(world);
     pursuer.reset(medusaHome, medusaHomeHeading, true);
+
+    auto setCollapseSolid = [&](int section, bool solid)
+    {
+        for (int id : collapsePlayerIds[section]) { player.setObstacleActive(id, solid); }
+        for (int id : collapseWorldIds[section])  { pursuer.setObstacleActive(id, solid); }
+    };
+    auto clearCollapse = [&]()
+    {
+        for (int i = 0; i < collapse.count(); ++i) { setCollapseSolid(i, false); }
+    };
 
     Debris debris;
     debris.init(Tuning::kMaxStones);
@@ -355,6 +414,16 @@ int main()
         debris.addAvoid(pillar.x, pillar.z, Tuning::kPillarBaseRadius);
     }
     gaze.reset();
+
+    // Random stones should not drop onto where a beam will be lying.
+    for (int i = 0; i < collapse.count(); ++i)
+    {
+        const Collapse::Spec& spec = collapse.spec(i);
+        if (spec.startAt >= 0.0f) { continue; }
+        const float side = (spec.rest.x > 0.0f) ? 1.0f : -1.0f;
+        debris.addAvoid(side * 1.0f, spec.rest.y, 1.0f);
+        debris.addAvoid(side * 3.0f, spec.rest.y, 1.0f);
+    }
 
     for (const Scene::CoverPillar& pillar : scene.coverPillars)
     {
@@ -690,6 +759,88 @@ int main()
             cameraShake = std::max(cameraShake, debris.shake());
         }
 
+        // --- the building coming apart -------------------------------------------
+        {
+            collapse.setTriggering(trial.state() == TrialState::Escape);
+            collapse.update(deltaTime, player.position());
+
+            const glm::vec3 dust(0.50f, 0.44f, 0.34f);
+            Collapse::Event event;
+            while (collapse.popEvent(event))
+            {
+                const Collapse::Spec& spec = collapse.spec(event.section);
+
+                switch (event.type)
+                {
+                    case Collapse::Event::Type::Crack:
+                        std::cout << "[Collapse] " << spec.name << " cracks" << std::endl;
+                        if (particlesAvailable)
+                        {
+                            particles.sprinkle(event.at, event.extent, event.count, dust);
+                        }
+                        break;
+
+                    case Collapse::Event::Type::Dust:
+                        if (particlesAvailable)
+                        {
+                            particles.sprinkle(event.at, event.extent, event.count, dust);
+                        }
+                        break;
+
+                    case Collapse::Event::Type::Detach:
+                        std::cout << "[Collapse] " << spec.name << " breaks away" << std::endl;
+                        debris.dropChunks(event.at, event.count,
+                                          std::max(event.extent.x, event.extent.z));
+                        if (particlesAvailable)
+                        {
+                            particles.sprinkle(event.at, event.extent, 30, dust);
+                        }
+                        break;
+
+                    case Collapse::Event::Type::Land:
+                    {
+                        std::cout << "[Collapse] " << spec.name << " comes down"
+                                  << (event.hitPlayer ? " ON the traveller" : "") << std::endl;
+
+                        setCollapseSolid(event.section, true);
+
+                        if (particlesAvailable)
+                        {
+                            // Thrown out along its whole length, not from one point.
+                            const bool alongX = event.extent.x >= event.extent.z;
+                            for (int k = -1; k <= 1; ++k)
+                            {
+                                const float f = 0.6f * static_cast<float>(k);
+                                const glm::vec3 along = alongX
+                                    ? glm::vec3(event.extent.x * f, 0.0f, 0.0f)
+                                    : glm::vec3(0.0f, 0.0f, event.extent.z * f);
+                                particles.burst(event.at + along, 40, dust, 3.4f);
+                            }
+                        }
+
+                        // A block of masonry is worse than a stone.
+                        if (event.hitPlayer && trial.state() == TrialState::Escape)
+                        {
+                            player.stun(Tuning::kStunDuration * 1.5f);
+                        }
+                        break;
+                    }
+
+                    case Collapse::Event::Type::Snuff:
+                        std::cout << "[Collapse] the falling stone puts out torch "
+                                  << event.torch << std::endl;
+                        if (particlesAvailable)
+                        {
+                            particles.burst(scene.torchFlamePosition(event.torch), 26,
+                                            glm::vec3(0.30f, 0.27f, 0.24f), 1.1f);
+                        }
+                        break;
+                }
+            }
+
+            cameraShake = std::max(cameraShake, collapse.shake());
+        }
+
         cameraShake = std::max(0.0f, cameraShake - deltaTime * 2.2f);
 
         // --- the chase ---------------------------------------------------------
@@ -835,6 +986,11 @@ int main()
                 debris.setIntensity(1.0f);
                 debris.setActive(true);
 
+                // Taking the treasure is what brings the place down.
+                collapse.reset();
+                clearCollapse();
+                collapse.begin();
+
                 std::cout << "[Medusa] gives chase" << std::endl;
             }
             else if (from == TrialState::Escape)
@@ -875,6 +1031,10 @@ int main()
                 debris.reset();
                 gaze.reset();
                 petrifyHold = 0.0f;
+
+                // Every block back in place, every torch relit.
+                collapse.reset();
+                clearCollapse();
                 std::cout << "[Trial] a new traveller enters the chamber" << std::endl;
             }
         }
@@ -991,6 +1151,14 @@ int main()
                     }
                 }
 #endif
+
+                // A person steers round a fallen block; so does the bot.
+                if (glm::length(walkDirection) > 1e-3f)
+                {
+                    walkDirection = player.world().avoidRubble(
+                        player.position(), glm::normalize(walkDirection),
+                        Tuning::kPlayerRadius, 6.0f);
+                }
             }
 
             autoReport += deltaTime;
@@ -1017,6 +1185,14 @@ int main()
                        gaze.beamLength(), gaze.eyeLevel(), gaze.sweepSide(),
                        player.speedFraction() < 0.9f ? 1 : 0,
                        scene.minPillarFade());
+                printf("[auto]   collapse");
+                for (int i = 0; i < collapse.count(); ++i)
+                {
+                    printf(" %s", Collapse::stageName(collapse.stage(i)));
+                }
+                printf(" | torches");
+                for (float power : scene.torchPower) { printf(" %.2f", power); }
+                printf("\n");
                 fflush(stdout);
             }
         }
@@ -1160,6 +1336,11 @@ int main()
         gDirector.setFollowTarget(player.position());
         gDirector.setFollowSpeed(player.speedFraction());
         gDirector.setDanger(chaseDanger);
+
+        // Look up at the chamber breaking - but only while he is still in it.
+        gDirector.setLookUp((trial.state() == TrialState::Escape
+                             && player.position().z < Tuning::kGateZ - 0.5f)
+                            ? collapse.tremor() : 0.0f);
         gDirector.setFollowHeading(player.heading());
         gDirector.update(gCamera, trial.state(), deltaTime, now);
 
@@ -1211,6 +1392,8 @@ int main()
         scene.fadeCoverBetween(gCamera.position(),
                                player.position() + glm::vec3(0.0f, 1.5f, 0.0f),
                                deltaTime);
+
+        scene.applyCollapse(collapse, now);
 
         // --- hand the gaze to the scene ------------------------------------------
         {

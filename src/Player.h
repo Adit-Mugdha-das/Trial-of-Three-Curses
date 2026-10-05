@@ -37,9 +37,14 @@ public:
     void setGateOpen(bool open) { m_world.gateOpen = open; }
 
     // A standing prop he cannot walk through, as a circle on the floor.
-    void addObstacle(float x, float z, float radius)
+    int addObstacle(float x, float z, float radius, bool active = true,
+                    bool rubble = false)
     {
-        m_world.addObstacle(x, z, radius);
+        return m_world.addObstacle(x, z, radius, active, rubble);
+    }
+    void setObstacleActive(int index, bool active)
+    {
+        m_world.setObstacleActive(index, active);
     }
 
     const WorldShape& world() const { return m_world; }

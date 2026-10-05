@@ -32,6 +32,11 @@ public:
     void burst(const glm::vec3& origin, int count, const glm::vec3& tint,
                float speed = 3.2f);
 
+    // Dust trickling DOWN out of a crack: spread over a box of the given half
+    // size, drifting slowly downward rather than puffing outward.
+    void sprinkle(const glm::vec3& origin, const glm::vec3& halfExtent,
+                  int count, const glm::vec3& tint);
+
     // Needs the camera basis to orient the billboards. Extract it from the
     // view matrix rather than the camera object: the view matrix is the
     // authority on what "right" and "up" mean on screen.
@@ -55,6 +60,11 @@ private:
         float size    = 0.1f;
         float growth  = 0.1f;
         float swirl   = 1.0f;    // radians per second around the plume axis
+
+        // Only the Djinn's own plume fades with the emitter. Bursts and dust
+        // belong to whatever made them - they used to vanish whenever the
+        // lamp's column was down, which is the whole of the escape.
+        bool fromEmitter = false;
     };
 
     Shader m_shader;

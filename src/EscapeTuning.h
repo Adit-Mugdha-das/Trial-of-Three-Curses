@@ -30,6 +30,21 @@ namespace Tuning
     constexpr float kMedusaRampTime   = 9.00f;
     constexpr float kCatchRadius      = 1.6f;
 
+    // --- the collapse: ceiling sections breaking away ------------------------
+    // Each one cracks (dust trickles out), shudders, tips about the edge it
+    // hangs from, then falls and stays down as an obstacle. The chamber's go
+    // quickly - he is only in there for about two seconds - and the
+    // corridor's are timed off HIS position, so they come down ahead of him
+    // where the chase camera can see them.
+    constexpr float kChamberCrackTime    = 0.30f;
+    constexpr float kChamberShakeTime    = 0.25f;
+    constexpr float kCorridorCrackTime   = 1.10f;
+    constexpr float kCorridorShakeTime   = 0.60f;
+    constexpr float kSectionDetachTime   = 0.30f;   // tipping on its hinge edge
+    constexpr float kSectionDetachAngle  = 24.0f;   // degrees before it breaks free
+    constexpr float kSectionGravity      = 16.0f;   // same as the stones
+    constexpr float kSectionTriggerAhead = 19.5f;   // corridor: starts this far ahead
+
     // --- Medusa's gaze -----------------------------------------------------
     // An attack cycle is Cooldown -> Telegraph -> Lock -> Sweep. Only the
     // last two can petrify; the telegraph exists so that nothing ever hurts

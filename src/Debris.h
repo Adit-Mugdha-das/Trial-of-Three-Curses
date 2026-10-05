@@ -54,6 +54,11 @@ public:
     // spawn timer. Used to collapse the corridor behind an escaping player.
     void collapseAround(const glm::vec3& centre, int count, float spread);
 
+    // Chunks breaking off a ceiling section: dropped from exactly `centre`,
+    // scattered by up to `spread` in x and z, anywhere in the level. Scenery,
+    // like collapseAround - the section itself is the hazard.
+    void dropChunks(const glm::vec3& centre, int count, float spread);
+
     // Returns true if a falling stone struck the player this frame.
     bool update(float deltaTime, const glm::vec3& playerPosition);
 

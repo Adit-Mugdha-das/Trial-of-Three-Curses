@@ -25,6 +25,10 @@ public:
 
     void setWorld(const WorldShape& world) { m_world = world; }
     void setGateOpen(bool open) { m_world.gateOpen = open; }
+    void setObstacleActive(int index, bool active)
+    {
+        m_world.setObstacleActive(index, active);
+    }
 
     void setActive(bool active) { m_active = active; }
     bool active() const { return m_active; }

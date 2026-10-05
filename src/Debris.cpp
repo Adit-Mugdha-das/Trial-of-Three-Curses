@@ -240,6 +240,39 @@ void Debris::collapseAround(const glm::vec3& centre, int count, float spread)
     }
 }
 
+void Debris::dropChunks(const glm::vec3& centre, int count, float spread)
+{
+    for (Stone& stone : m_stones)
+    {
+        if (count <= 0)
+        {
+            break;
+        }
+        if (stone.active)
+        {
+            continue;
+        }
+
+        stone.radius   = randomRange(0.22f, 0.45f);
+        stone.position = { centre.x + randomRange(-spread, spread),
+                           centre.y,
+                           centre.z + randomRange(-spread, spread) };
+        stone.velocity = { randomRange(-1.0f, 1.0f), randomRange(-1.0f, 0.5f),
+                           randomRange(-1.0f, 1.0f) };
+        stone.rotation = { randomRange(0.0f, 360.0f), randomRange(0.0f, 360.0f),
+                           randomRange(0.0f, 360.0f) };
+        stone.spin     = { randomRange(-260.0f, 260.0f), randomRange(-260.0f, 260.0f),
+                           randomRange(-260.0f, 260.0f) };
+
+        stone.life   = Tuning::kStoneRestDuration;
+        stone.landed = false;
+        stone.hasHit = true;      // scenery
+        stone.active = true;
+
+        --count;
+    }
+}
+
 bool Debris::update(float deltaTime, const glm::vec3& playerPosition)
 {
     m_shake = std::max(0.0f, m_shake - deltaTime * 2.6f);

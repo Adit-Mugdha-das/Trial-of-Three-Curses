@@ -30,6 +30,11 @@ public:
     // down as this rises, so she stops blocking the view forward.
     void setDanger(float danger01) { m_danger = danger01; }
 
+    // 0..1: the chamber is coming apart overhead. The chase camera normally
+    // looks down at the floor ahead, which puts the top of the walls just out
+    // of frame - so it tilts up to watch the ceiling break, then settles.
+    void setLookUp(float amount01) { m_lookUp = amount01; }
+
     // Which way the traveller is facing, in degrees. The Caught shot swings
     // round to his face, and his face can be pointing anywhere.
     void setFollowHeading(float degrees) { m_followHeading = degrees; }
@@ -50,6 +55,7 @@ private:
     glm::vec3 m_follow{ 0.0f, 0.0f, 0.0f };
     float m_followSpeed = 0.0f;
     float m_danger      = 0.0f;
+    float m_lookUp      = 0.0f;
     float m_followHeading = 180.0f;
 
     Shot shotFor(TrialState state) const;

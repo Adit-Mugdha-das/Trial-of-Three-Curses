@@ -113,6 +113,7 @@ void ParticleSystem::respawn(Particle& particle)
     };
 
     particle.swirlOrigin = m_emitterPosition;
+    particle.fromEmitter = true;
 
     particle.maxLife = randomRange(1.5f, 3.0f);
     particle.life    = particle.maxLife;
@@ -162,6 +163,42 @@ void ParticleSystem::burst(const glm::vec3& origin, int count,
         particle.growth  = randomRange(0.30f, 0.80f);
         particle.swirl   = randomRange(-0.6f, 0.6f);
         particle.tint    = tint * randomRange(0.75f, 1.15f);
+        particle.fromEmitter = false;
+
+        --count;
+    }
+}
+
+void ParticleSystem::sprinkle(const glm::vec3& origin, const glm::vec3& halfExtent,
+                              int count, const glm::vec3& tint)
+{
+    for (Particle& particle : m_particles)
+    {
+        if (count <= 0)
+        {
+            break;
+        }
+        if (particle.life > 0.0f)
+        {
+            continue;
+        }
+
+        particle.position = origin + glm::vec3(
+            randomRange(-halfExtent.x, halfExtent.x),
+            randomRange(-halfExtent.y, halfExtent.y),
+            randomRange(-halfExtent.z, halfExtent.z));
+        particle.swirlOrigin = particle.position;
+        particle.velocity = { randomRange(-0.25f, 0.25f),
+                              -randomRange(0.9f, 2.4f),
+                              randomRange(-0.25f, 0.25f) };
+
+        particle.maxLife = randomRange(1.0f, 1.8f);
+        particle.life    = particle.maxLife;
+        particle.size    = randomRange(0.08f, 0.17f);
+        particle.growth  = randomRange(0.10f, 0.30f);
+        particle.swirl   = 0.0f;
+        particle.tint    = tint * randomRange(0.8f, 1.15f);
+        particle.fromEmitter = false;
 
         --count;
     }
@@ -240,7 +277,7 @@ void ParticleSystem::update(float deltaTime, float /*time*/)
         out[4] = particle.tint.r;
         out[5] = particle.tint.g;
         out[6] = particle.tint.b;
-        out[7] = alpha * m_emitterStrength;
+        out[7] = particle.fromEmitter ? alpha * m_emitterStrength : alpha;
 
         ++writeIndex;
         ++m_aliveCount;

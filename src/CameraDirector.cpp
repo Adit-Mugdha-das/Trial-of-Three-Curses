@@ -80,6 +80,12 @@ CameraDirector::Shot CameraDirector::shotFor(TrialState state) const
             chase.distance = 9.0f + 1.8f * m_followSpeed - 2.8f * d;
             chase.yaw      = 270.0f;
             chase.pitch    = 18.0f + 20.0f * d;
+
+            // Tilting up for the falling cornice: looking up 10 degrees from
+            // about head height, so the top of the front wall fills the upper
+            // part of the frame and he runs along the bottom of it.
+            chase.pitch    += (-10.0f - chase.pitch) * m_lookUp;
+            chase.target.y += 2.6f * m_lookUp;
             return chase;
         }
 

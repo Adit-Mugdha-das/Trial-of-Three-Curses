@@ -131,7 +131,10 @@ void Pursuer::update(const glm::vec3& target, float deltaTime)
 
     if (distance > 0.001f)
     {
-        const glm::vec3 direction = toTarget / distance;
+        // Straight at him - unless a fallen block is in the way, in which
+        // case the smallest turn that clears it.
+        const glm::vec3 direction = m_world.avoidRubble(m_position, toTarget / distance,
+                                                        kBodyRadius, 3.0f);
         m_velocity = direction * m_speed;
         m_position += m_velocity * deltaTime;
     }

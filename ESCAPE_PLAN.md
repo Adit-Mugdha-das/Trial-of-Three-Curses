@@ -505,3 +505,80 @@ hiding (`visible=0.00` through all three attacks, `exposure=0.00`, escaped).
 person. In particular the chase camera looks forward while Medusa is behind it,
 so a player cannot see the lane a pillar shades - they work it out from the beam
 stopping on the pillar. Playtest that before trusting the 97.5%.
+
+---
+
+## 14. The chamber visibly collapses  *(added after the gaze)*
+
+Before this, the only collapse was stones appearing under a ceiling that never
+changed. Now the building itself breaks.
+
+### What happens
+
+Each ceiling section runs **Intact -> Cracking -> Shaking -> Detaching -> Falling -> Down**:
+
+1. **Cracking** - dark cracks grow across its underside and front face; dust trickles out.
+2. **Shaking** - it shudders in place; a low rumble goes through the camera.
+3. **Detaching** - it tips on the edge it hangs from (a hinge rotation), and chunks break off.
+4. **Falling** - it breaks free, keeps turning in the air, and slaps down onto its resting angle.
+5. **Down** - a burst of dust, a camera jolt, and it becomes a solid obstacle.
+
+| Where | Sections | When |
+|---|---|---|
+| Chamber | 3 blocks of a new cornice (a stone ledge round the top of the walls), either side of the doorway | 0, 0.12 and 0.24 s after the treasure is taken |
+| Corridor | 3 ceiling beams that split in two; one half falls | when he is 19.5 units short of each beam, so it lands ~4 units ahead of him |
+
+**Torches:** the chamber's two flicker hard while it shakes. In the corridor the
+beam at 30.5 puts out the torch across from it, the beam at 44.5 smashes the
+torch beside it, and the beam at 58.5 only makes its torch gutter. A dead
+torch stops lighting: the light budget goes to the next lit one.
+
+**Reuse:** dust is the particle system (a new `sprinkle` for dust falling *down*);
+chunks are the debris pool (`dropChunks`); the shake feeds the same camera
+shake as the stones.
+
+### A route always stays open
+
+- The chamber blocks land at least 1.7 units clear of the doorway.
+- Every corridor half-beam leaves a 3.95-wide lane (Medusa needs 2.3).
+- Fallen sections are registered as obstacles at start-up, switched off, and
+  switched on as each lands - for Medusa as well as the traveller.
+
+### Where it lives
+
+| File | Role |
+|---|---|
+| `src/Collapse.h/.cpp` | stages, poses, events, footprints, torch levels; no GL, unit-tested. `standardLayout()` is the single list the scene, main and the tests all build from |
+| `Scene::buildCeilingWork` / `applyCollapse` | cornice, beams, cracks, flames and torch lights |
+| `WorldShape::avoidRubble` | steering round fallen blocks |
+| `CameraDirector::setLookUp` | the chase camera tilting up to watch the chamber break |
+
+### What testing found
+
+- **The first beam layout broke the game.** Beams alternated sides, and two of them
+  landed right behind the pillars the player hides behind from Medusa's gaze. The
+  cover-using bot went from escaping every run to escaping none. All three now fall
+  on the left, away from the pillar just before each one.
+- **A long block met head-on stops anyone dead.** Sliding along a circle does nothing
+  when you hit it square on. Medusa now steers round fallen blocks (only fallen
+  blocks - the pillars behave as before, so the gaze balance is unchanged).
+- **The chamber collapse was out of shot.** The chase camera looks down at the floor,
+  and the top of the walls sat just above the frame. It now tilts up to watch the
+  ceiling break while he is still in the chamber.
+- **A frame of solid brown at the doorway** (an older bug): the camera rode at about
+  5 high through a doorway only 5 high, passing through the lintel. It now stays
+  below the lintel until it is through.
+
+| Bot (40 runs each) | Collapse off | Collapse on |
+|---|---|---|
+| ignores the gaze | 0% escape | 0% |
+| strafes | 0% | 0% |
+| uses cover | 100% | 100% |
+| uses cover badly | 97.5% | 85% |
+
+So the collapse is a real hazard, but not an unfair one: it costs an imperfect player
+a little, and never lands on anyone who keeps moving.
+
+**Not verified:** how it feels to a person. The chamber blocks are seen cracking and
+tipping at the top of the frame, but they land out of shot, because he is at the door
+by then. Look back with the free camera (TAB) to see them lying there.

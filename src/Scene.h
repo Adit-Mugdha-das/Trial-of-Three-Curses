@@ -7,6 +7,7 @@
 #include "Light.h"
 #include "Mesh.h"
 #include "SceneNode.h"
+#include "Collapse.h"
 #include "Shader.h"
 #include "Texture.h"
 #include "TrialState.h"
@@ -56,6 +57,18 @@ public:
         float radius = 0.0f;
     };
     std::vector<PropObstacle> propObstacles;
+
+    // --- the collapse ---------------------------------------------------------
+    // Poses every breakable ceiling section from the collapse, grows its
+    // cracks, and takes each torch's brightness from it.
+    void applyCollapse(const Collapse& collapse, float time);
+
+    // 0..1 per torch, by Collapse's torch ids: 0-1 the chamber's, 2+ the
+    // corridor's. Scales each flame's size, glow and light.
+    std::vector<float> torchPower = std::vector<float>(Collapse::kMaxTorches, 1.0f);
+
+    // Where a torch's flame is, for the puff of smoke when it goes out.
+    glm::vec3 torchFlamePosition(int torch) const;
 
     // --- Medusa's gaze ------------------------------------------------------
     // The beam itself: a translucent cone from between her eyes. A child of
@@ -256,6 +269,29 @@ private:
     // change of target (the end of an attack, or being caught) never jerks.
     std::vector<std::vector<SceneNode*>> m_pillarParts;
     std::vector<float> m_pillarFade;
+
+    // One per Collapse section, in the same order.
+    struct Crack
+    {
+        SceneNode* node = nullptr;
+        glm::vec3  start{ 0.0f };
+        glm::vec3  direction{ 1.0f, 0.0f, 0.0f };
+        float      length = 1.0f;
+        float      threshold = 0.0f;   // how cracked the section must be first
+    };
+    struct CollapsePiece
+    {
+        SceneNode* node = nullptr;          // posed each frame
+        SceneNode* companion = nullptr;     // the half of a beam that stays up
+        std::vector<Crack> cracks;
+        std::vector<Crack> companionCracks;
+    };
+    std::vector<CollapsePiece> m_collapsePieces;
+
+    void buildCeilingWork();
+    void addCracks(SceneNode* parent, const glm::vec3& size, int seed,
+                   std::vector<Crack>& out);
+    static void growCracks(std::vector<Crack>& cracks, float level);
 
     float m_headYaw   = 0.0f;
     float m_headPitch = 0.0f;
