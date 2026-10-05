@@ -28,7 +28,7 @@ struct WorldShape
     // Standing props - the scale, the lamp - as circles on the floor. A fixed
     // array rather than a vector so the whole struct stays trivially
     // copyable and allocation-free; both the player and Medusa hold one.
-    static constexpr int kMaxObstacles = 8;
+    static constexpr int kMaxObstacles = 16;
 
     struct Obstacle
     {

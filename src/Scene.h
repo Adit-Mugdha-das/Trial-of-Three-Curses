@@ -57,6 +57,46 @@ public:
     };
     std::vector<PropObstacle> propObstacles;
 
+    // --- Medusa's gaze ------------------------------------------------------
+    // The beam itself: a translucent cone from between her eyes. A child of
+    // her head, so it turns wherever the head turns.
+    SceneNode* gazeBeam = nullptr;
+
+    // Tall cylinders that can break her line of sight. Kept apart from
+    // propObstacles on purpose: a collision circle is the widest part of a
+    // base, whereas the gaze only cares about the shaft.
+    struct CoverPillar
+    {
+        float x = 0.0f, z = 0.0f, radius = 0.0f, height = 0.0f;
+    };
+    std::vector<CoverPillar> coverPillars;
+
+    // A pillar between the camera and the traveller hides him from the
+    // player exactly as it hides him from Medusa - and the chase camera sits
+    // on Medusa's side. So any pillar standing in that line fades to a ghost,
+    // and he stays visible while he hides.
+    void fadeCoverBetween(const glm::vec3& eye, const glm::vec3& target,
+                          float deltaTime);
+
+    // The most faded any pillar is right now: 1 = all solid. For diagnostics.
+    float minPillarFade() const
+    {
+        float lowest = 1.0f;
+        for (float f : m_pillarFade)
+        {
+            if (f < lowest) { lowest = f; }
+        }
+        return lowest;
+    }
+
+    // While true, main steers her head, eyes and beam from the Gaze module.
+    // While false she simply watches the traveller, as in the cursed ending.
+    bool      gazeDriven     = false;
+    glm::vec3 gazeAim{ 0.0f };      // world point her head turns toward
+    float     gazeEye        = 0.3f;   // 0..1 brightness of her eyes
+    float     gazeBeamWidth  = 0.0f;   // 0..1 of the full cone; 0 hides it
+    float     gazeBeamLength = 0.0f;
+
     // Rebuilt every frame from the current node world positions, so lights
     // that are attached to moving geometry follow it automatically.
     std::vector<Light> lights;
@@ -211,6 +251,14 @@ private:
     // locked to his feet at any speed and never jumps when the speed changes.
     float m_walkPhase = 0.0f;
     float m_gate = 0.0f;
+
+    // Her head glides toward its aim rather than snapping to it, so a sudden
+    // change of target (the end of an attack, or being caught) never jerks.
+    std::vector<std::vector<SceneNode*>> m_pillarParts;
+    std::vector<float> m_pillarFade;
+
+    float m_headYaw   = 0.0f;
+    float m_headPitch = 0.0f;
 
     void buildTextures();
     void buildChamber();

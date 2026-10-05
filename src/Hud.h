@@ -35,6 +35,13 @@ public:
         float exitProgress = 0.0f;   // 0 at the treasure, 1 at the doorway out
         float danger       = 0.0f;   // 0 far away, 1 about to be caught
 
+        // Medusa's gaze: how full the petrification bar is, and whether an
+        // attack is under way. The second matters even with the bar empty -
+        // it is the warning.
+        float exposure    = 0.0f;
+        float gazeWarning = 0.0f;
+        bool  gazeLive    = false;
+
         float time = 0.0f;           // for the danger pulse
     };
 

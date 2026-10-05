@@ -30,6 +30,51 @@ namespace Tuning
     constexpr float kMedusaRampTime   = 9.00f;
     constexpr float kCatchRadius      = 1.6f;
 
+    // --- Medusa's gaze -----------------------------------------------------
+    // An attack cycle is Cooldown -> Telegraph -> Lock -> Sweep. Only the
+    // last two can petrify; the telegraph exists so that nothing ever hurts
+    // without having been seen coming.
+    constexpr float kGazeFirstDelay = 0.9f;    // after both are in the corridor
+    constexpr float kGazeCooldown   = 1.80f;
+    constexpr float kGazeTelegraph  = 1.1f;    // eyes brighten, thin tracer follows him
+    constexpr float kGazeLock       = 0.35f;   // aim freezes, beam goes solid
+    constexpr float kGazeSweep      = 1.9f;    // the beam crosses the corridor
+    constexpr float kGazeSweepArc   = 38.0f;   // HALF the arc, in degrees
+    constexpr float kGazeConeHalf   = 10.0f;   // half-angle of the beam, degrees
+    constexpr float kGazeRange      = 28.0f;
+    constexpr float kGazeTargetHeight = 1.5f;  // where on him the beam aims
+    constexpr float kGazeTrackRate  = 160.0f;  // degrees/s while she is not locked
+
+    // Seconds of full, unobstructed exposure that turn him to stone, and how
+    // long a full bar takes to drain again once the beam is off him.
+    //
+    // Chosen by simulating bots that ignore the gaze, strafe, use cover and
+    // use cover badly. The result is a cliff, not a slope: ignoring it or
+    // strafing is fatal on the second attack (a strafe is actually WORSE than
+    // standing still, because moving with the sweep lengthens the time in the
+    // beam), while hiding for just the ~1 s the beam passes almost always
+    // works. At 0.75 a single mistake leaves him alive at ~87% of the bar and
+    // slowed; the second kills.
+    constexpr float kGazeFillTime   = 0.75f;
+    constexpr float kGazeDecayTime  = 3.0f;
+
+    // Stone is heavy: at full exposure he moves this much slower. Without it
+    // the stone creeping up his legs would be purely cosmetic.
+    constexpr float kExposureSlowdown = 0.30f;
+
+    // --- cover pillars -----------------------------------------------------
+    // Tall enough to block the eye-to-chest line, and solid. Rubble is
+    // deliberately NOT cover: it is too low to break the line of sight.
+    //
+    // They alternate sides of the corridor centre, so a straight run down the
+    // middle never touches one - using cover is a decision, not an accident.
+    constexpr int   kPillarCount       = 7;
+    constexpr float kPillarShaftRadius = 0.80f;   // what blocks the gaze
+    constexpr float kPillarBaseRadius  = 1.00f;   // what blocks the feet
+    constexpr float kPillarHeight      = 7.10f;   // runs up into the ceiling
+    constexpr float kPillarX[kPillarCount] = { -1.8f,  1.8f, -1.8f,  1.8f, -1.8f,  1.8f, -1.8f };
+    constexpr float kPillarZ[kPillarCount] = { 20.0f, 27.0f, 34.0f, 41.0f, 48.0f, 55.0f, 62.0f };
+
     // --- handicap from the verdict (Step F) ------------------------------
     constexpr float kBlessedSpeedBonus = -0.4f;
     constexpr float kBlessedHeadStart  =  5.00f;

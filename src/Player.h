@@ -56,6 +56,11 @@ public:
     // into it, so he slides around the obstacle instead of sticking to it.
     void pushOutOf(const glm::vec3& centre, float combinedRadius);
 
+    // Stone is heavy. 0..1, from the gaze's exposure; slows him by up to
+    // Tuning::kExposureSlowdown. Like a stun this changes his speed CAP, not
+    // his input - update() normalises the input and would discard the scale.
+    void setExposureSlow(float exposure01) { m_exposureSlow = exposure01; }
+
     void stun(float duration);
     bool stunned() const { return m_stunRemaining > 0.0f; }
     float stunRemaining() const { return m_stunRemaining; }
@@ -78,6 +83,7 @@ private:
     float m_heading = 180.0f;
 
     float m_stunRemaining = 0.0f;
+    float m_exposureSlow  = 0.0f;
     bool  m_autoFace = true;
 
     // Shared with Medusa - see WorldShape.h.

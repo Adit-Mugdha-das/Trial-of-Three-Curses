@@ -10,6 +10,7 @@
 #include "Camera.h"
 #include "CameraDirector.h"
 #include "Debris.h"
+#include "Gaze.h"
 #include "Hud.h"
 #include "EscapeTuning.h"
 #include "ParticleSystem.h"
@@ -52,10 +53,28 @@ namespace
     // Is a point somewhere a camera may legitimately sit? The level is a
     // wide chamber joined to a narrow corridor, and an orbit camera happily
     // swings straight through a wall without this.
+    // Pillars the camera must not end up inside: x, z, radius.
+    struct CameraBlocker { float x, z, radius; };
+    std::vector<CameraBlocker> gCameraBlockers;
+
     bool cameraPositionIsInside(const glm::vec3& p, const glm::vec3& subject,
                                 bool allowThroughDoorway)
     {
         if (p.y < 0.7f) { return false; }              // through the floor
+
+        // Inside a pillar means looking out at the back of its faces. Pulling
+        // the camera toward its subject until it is clear reads as it easing
+        // past an obstruction.
+        for (const CameraBlocker& b : gCameraBlockers)
+        {
+            const float dx = p.x - b.x;
+            const float dz = p.z - b.z;
+            const float reach = b.radius + 0.35f;
+            if (p.y < Tuning::kPillarHeight && dx * dx + dz * dz < reach * reach)
+            {
+                return false;
+            }
+        }
 
         // The front wall separates the chamber from the corridor. A camera on
         // the far side of it from its subject is looking through stone - even
@@ -325,6 +344,40 @@ int main()
                        Tuning::kExitZ, 6.8f);
     debris.setMaterial(scene.rubbleMaterial);
 
+    // Medusa's gaze. Its cover comes straight from the scene's pillars, so the
+    // line-of-sight test and the geometry can never disagree about where a
+    // pillar stands.
+    Gaze gaze;
+    gaze.setDoorway(Tuning::kGateZ, 3.5f);
+    for (const Scene::CoverPillar& pillar : scene.coverPillars)
+    {
+        gaze.addCover(pillar.x, pillar.z, pillar.radius, pillar.height);
+        debris.addAvoid(pillar.x, pillar.z, Tuning::kPillarBaseRadius);
+    }
+    gaze.reset();
+
+    for (const Scene::CoverPillar& pillar : scene.coverPillars)
+    {
+        gCameraBlockers.push_back({ pillar.x, pillar.z, Tuning::kPillarBaseRadius });
+    }
+
+    // Wall torches too. The camera hugs the wall when the traveller does, and
+    // hiding behind pillars makes that more likely - a flame filling a quarter
+    // of the screen is not a view anyone wants.
+    for (SceneNode* torch : scene.corridorTorches)
+    {
+        gCameraBlockers.push_back({ torch->worldPosition().x,
+                                    torch->worldPosition().z, 0.55f });
+    }
+
+    std::cout << "[Gaze] " << scene.coverPillars.size()
+              << " cover pillars registered" << std::endl;
+
+    // How much of the traveller has turned to stone so far. Held across the
+    // moment he is caught, so the shader does not snap back to flesh and
+    // climb all over again.
+    float petrifyHold = 0.0f;
+
     // Decaying camera shake, driven by impacts.
     float cameraShake = 0.0f;
 
@@ -430,6 +483,11 @@ int main()
               << "  3          debug: get caught\n"
               << "  R          abandon the trial and reset\n"
               << "  I          switch between trial and manual inspection\n"
+              << "\nMedusa's gaze (during the escape)\n"
+              << "  Green caps flash either side of the top bar = she is about to look.\n"
+              << "  Her beam sweeps the whole corridor: running or strafing will NOT save\n"
+              << "  you. Get a tall PILLAR between you and her until it passes (about 1 s).\n"
+              << "  The top bar fills as you turn to stone; full bar = petrified.\n"
               << "\nManual inspection (press I first)\n"
               << "  [ ]        tilt the scale beam by hand\n"
               << "  O          open / shut the lamp lid (hinge pivot)\n"
@@ -648,6 +706,43 @@ int main()
             trial.caught();
         }
 
+        // --- Medusa's gaze -----------------------------------------------------
+        {
+            const bool escaping = (trial.state() == TrialState::Escape);
+
+            // She may begin an attack once her wind-up is over and he is in the
+            // corridor. She does not need to be in it herself: the line-of-sight
+            // test already refuses to gaze through the front wall, and waiting
+            // for her to arrive wasted nearly half of the run.
+            gaze.setActive(escaping && !pursuer.windingUp()
+                           && player.position().z > Tuning::kGateZ + 1.5f);
+
+            if (escaping)
+            {
+                const glm::vec3 eye = (scene.medusaHead != nullptr)
+                    ? scene.medusaHead->worldPosition()
+                    : pursuer.position() + glm::vec3(0.0f, 3.85f, 0.0f);
+
+                gaze.update(eye, player.position(), deltaTime);
+                player.setExposureSlow(gaze.exposure());
+
+                if (gaze.caught())
+                {
+                    std::cout << "[Gaze] full exposure - the stone takes hold"
+                              << std::endl;
+                    trial.caught();
+                }
+            }
+            else
+            {
+                player.setExposureSlow(0.0f);
+            }
+
+            // Stone is not undone by the state changing underneath it.
+            if (escaping)                                 { petrifyHold = gaze.exposure(); }
+            else if (trial.state() != TrialState::Caught) { petrifyHold = 0.0f; }
+        }
+
         // How close she is, 0..1. Shared by the chase camera and the HUD so
         // they can never disagree about how much trouble he is in.
         {
@@ -734,6 +829,7 @@ int main()
                 // difficulty for everyone who gets this far.
                 pursuer.reset(medusaHome, medusaHomeHeading, false);
                 pursuer.setActive(true);
+                gaze.reset();
 
                 debris.reset();
                 debris.setIntensity(1.0f);
@@ -744,6 +840,7 @@ int main()
             else if (from == TrialState::Escape)
             {
                 pursuer.setActive(false);
+                gaze.reset();
 
                 // Stop spawning, but let what is already falling land.
                 debris.setActive(false);
@@ -776,6 +873,8 @@ int main()
                 scene.treasureTaken = false;
                 pursuer.reset(medusaHome, medusaHomeHeading, true);
                 debris.reset();
+                gaze.reset();
+                petrifyHold = 0.0f;
                 std::cout << "[Trial] a new traveller enters the chamber" << std::endl;
             }
         }
@@ -799,8 +898,10 @@ int main()
 
             if (autoClock > 1.0f && trial.state() == TrialState::Waiting)
             {
-                std::cout << "[auto] pressing 2 (cursed)" << std::endl;
-                trial.forceOutcome(false);
+                // The blessed path: only a true heart is ever offered the
+                // treasure, so only it reaches the escape and the gaze.
+                std::cout << "[auto] pressing 1 (blessed)" << std::endl;
+                trial.forceOutcome(true);
             }
 
             if (trial.state() == TrialState::TreasureRevealed)
@@ -811,6 +912,85 @@ int main()
             else if (trial.state() == TrialState::Escape)
             {
                 walkDirection = glm::vec3(0.0f, 0.0f, 1.0f);
+
+#ifdef TRIAL_AUTOPLAY_HIDE
+                // The cover-seeking bot from the simulation, ported: commit to
+                // one pillar per attack, pass it on the open side, then tuck
+                // into the lane it shades - and only while the beam is
+                // actually passing, because hiding any longer just hands
+                // Medusa the lead.
+                static int hideIndex = -1;
+                const glm::vec3 me  = player.position();
+                const glm::vec3 her = pursuer.position();
+
+                if (gaze.warning() <= 0.0f) { hideIndex = -1; }
+                else
+                {
+                    if (hideIndex < 0)
+                    {
+                        float bestAhead = 1e9f;
+                        for (int k = 0; k < Tuning::kPillarCount; ++k)
+                        {
+                            const float ahead = Tuning::kPillarZ[k] - me.z;
+                            if (ahead > 0.6f && ahead < 16.0f && ahead < bestAhead)
+                            {
+                                hideIndex = k;
+                                bestAhead = ahead;
+                            }
+                        }
+                    }
+
+                    if (hideIndex >= 0)
+                    {
+                        const float px = Tuning::kPillarX[hideIndex];
+                        const float pz = Tuning::kPillarZ[hideIndex];
+
+                        glm::vec2 lane(px - her.x, pz - her.z);
+                        const float len = glm::length(lane);
+                        if (len > 1e-3f) { lane /= len; }
+
+                        const float tuck = Tuning::kPillarBaseRadius + 1.0f;
+                        const glm::vec2 hidden(px + lane.x * tuck, pz + lane.y * tuck);
+                        const glm::vec2 onward(px + lane.x * (tuck + 3.0f),
+                                               pz + lane.y * (tuck + 3.0f));
+
+                        const float pt = gaze.phaseTime();
+                        const bool lockOrSweep =
+                            gaze.phase() == Gaze::Phase::Lock ||
+                            (gaze.phase() == Gaze::Phase::Sweep && pt < 1.45f);
+
+                        const float toHidden = glm::length(hidden - glm::vec2(me.x, me.z));
+                        const float eta = toHidden / Tuning::kPlayerSpeed;
+                        const float timeToLock =
+                            (gaze.phase() == Gaze::Phase::Telegraph)
+                            ? (Tuning::kGazeTelegraph - pt) : 0.0f;
+
+                        const bool pastWindow =
+                            gaze.phase() == Gaze::Phase::Sweep && pt >= 1.45f;
+
+                        if (!pastWindow && (lockOrSweep || timeToLock <= eta + 0.25f))
+                        {
+                            glm::vec2 goal;
+                            if (me.z < pz - 0.4f)
+                            {
+                                const float openSide = (px < 0.0f) ? 1.0f : -1.0f;
+                                goal = glm::vec2(px + openSide * 2.1f, pz - 0.2f);
+                            }
+                            else
+                            {
+                                goal = (toHidden > 0.5f) ? hidden : onward;
+                            }
+
+                            glm::vec2 toGoal = goal - glm::vec2(me.x, me.z);
+                            if (glm::length(toGoal) > 0.15f)
+                            {
+                                toGoal = glm::normalize(toGoal);
+                                walkDirection = glm::vec3(toGoal.x, 0.0f, toGoal.y);
+                            }
+                        }
+                    }
+                }
+#endif
             }
 
             autoReport += deltaTime;
@@ -831,6 +1011,12 @@ int main()
                        pursuer.position().x, pursuer.position().z,
                        pursuer.distanceTo(pp), debris.activeCount(),
                        scene.petrifyLevel());
+                printf("[auto]   gaze %-9s exposure=%.2f visible=%.2f "
+                       "beamLen=%.1f eye=%.2f side=%+d slowed=%d minFade=%.2f\n",
+                       gaze.phaseName(), gaze.exposure(), gaze.visibility(),
+                       gaze.beamLength(), gaze.eyeLevel(), gaze.sweepSide(),
+                       player.speedFraction() < 0.9f ? 1 : 0,
+                       scene.minPillarFade());
                 fflush(stdout);
             }
         }
@@ -1020,6 +1206,32 @@ int main()
             scene.travellerHead->visible = (gViewMode != ViewMode::FirstPerson);
         }
 
+        // A pillar between the camera and him ghosts out, so he can be seen
+        // while he hides behind it.
+        scene.fadeCoverBetween(gCamera.position(),
+                               player.position() + glm::vec3(0.0f, 1.5f, 0.0f),
+                               deltaTime);
+
+        // --- hand the gaze to the scene ------------------------------------------
+        {
+            const bool escaping = (trial.state() == TrialState::Escape);
+
+            scene.gazeDriven = escaping;
+            if (escaping)
+            {
+                scene.gazeAim        = gaze.aimPoint();
+                scene.gazeEye        = gaze.eyeLevel();
+                scene.gazeBeamWidth  = gaze.beamWidth();
+                scene.gazeBeamLength = gaze.beamLength();
+            }
+
+            // Exposure IS the traveller turning to stone: the number that fills
+            // the bar also drives the shader, the walk cycle and the colour
+            // draining from the screen. applyTrial rewrites petrifyTarget every
+            // frame, so this has to come after it.
+            scene.petrifyTarget = std::max(scene.petrifyTarget, petrifyHold);
+        }
+
         scene.update(now, deltaTime);
 
         // Emission follows the energy column, so the plume grows and dies
@@ -1201,7 +1413,10 @@ int main()
                     (player.position().z - from) / (Tuning::kExitZ - from),
                     0.0f, 1.0f);
 
-                info.danger = chaseDanger;
+                info.danger      = chaseDanger;
+                info.exposure    = gaze.exposure();
+                info.gazeWarning = gaze.warning();
+                info.gazeLive    = gaze.beamLive();
             }
 
             hud.draw(info, gWindowWidth, gWindowHeight);

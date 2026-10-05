@@ -172,6 +172,44 @@ void Hud::draw(const Info& info, int windowWidth, int windowHeight)
              markerColor);
     }
 
+    // --- Medusa's gaze: the petrification bar -----------------------------------
+    // Stacked above the danger bar and a little taller, because during an
+    // attack this is the one that matters.
+    if (info.escapeActive)
+    {
+        const float barBottom = trackBottom + trackHeight + 8.0f * pixelY;
+        const float barH      = 12.0f * pixelY;
+        const float ex        = glm::clamp(info.exposure, 0.0f, 1.0f);
+
+        rect({ trackLeft, barBottom }, { trackWidth, barH },
+             { 0.10f, 0.09f, 0.13f, 0.85f });
+
+        // Living green turning to grey stone as it fills.
+        const glm::vec3 flesh(0.45f, 0.85f, 0.35f);
+        const glm::vec3 stone(0.66f, 0.68f, 0.72f);
+        const glm::vec3 c = glm::mix(flesh, stone, ex);
+
+        rect({ trackLeft, barBottom }, { trackWidth * ex, barH },
+             { c.r, c.g, c.b, 0.95f });
+
+        // Warning caps either side. They blink through the telegraph and burn
+        // steadily once the beam is live, so there is a cue even in first
+        // person, where Medusa is behind the camera and unseen.
+        if (info.gazeWarning > 0.0f)
+        {
+            const float blink = info.gazeLive
+                              ? 1.0f
+                              : 0.45f + 0.55f * std::sin(info.time * 20.0f);
+            const glm::vec4 cap(0.55f, 1.0f, 0.35f, glm::clamp(blink, 0.0f, 1.0f));
+
+            const float capW = 10.0f * pixelX;
+            rect({ trackLeft - capW - 6.0f * pixelX, barBottom - 2.0f * pixelY },
+                 { capW, barH + 4.0f * pixelY }, cap);
+            rect({ trackLeft + trackWidth + 6.0f * pixelX, barBottom - 2.0f * pixelY },
+                 { capW, barH + 4.0f * pixelY }, cap);
+        }
+    }
+
     glBindVertexArray(0);
 
     glDisable(GL_BLEND);

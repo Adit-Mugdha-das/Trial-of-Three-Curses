@@ -376,6 +376,24 @@ void Scene::buildMedusa()
     add(medusaHead, "EyeR", &m_sphere,
         { 0.21f, 0.08f, 0.4f }, { 0.16f, 0.16f, 0.1f }, kEye);
 
+    // The gaze made visible: a long translucent cone from between her eyes.
+    // The cone mesh has its apex at +Y; rotating -90 degrees about X sends
+    // +Y to -Z, so the apex sits at her eyes and the wide end points away
+    // along the head's forward axis. Length and width are set every frame.
+    {
+        Material beam;
+        beam.ka = { 0.0f, 0.0f, 0.0f };
+        beam.kd = { 0.0f, 0.0f, 0.0f };
+        beam.ks = { 0.0f, 0.0f, 0.0f };
+        beam.emissive = { 0.35f, 0.95f, 0.25f };
+        beam.opacity  = 0.2f;
+
+        gazeBeam = add(medusaHead, "GazeBeam", &m_cone,
+                       { 0.0f, 0.08f, 1.0f }, { 1.0f, 1.0f, 1.0f }, beam);
+        gazeBeam->rotation = { -90.0f, 0.0f, 0.0f };
+        gazeBeam->visible  = false;
+    }
+
     // --- snakes: the deepest hierarchy in the scene ---
     // 7 snakes, each a chain of 4 segments. A segment is a child of the one
     // below it, so bending one bends everything above it, and the whole head
@@ -801,6 +819,47 @@ void Scene::buildCorridor()
         corridorTorches.push_back(torch);
     }
 
+    // --- cover pillars -------------------------------------------------------
+    // Tall enough to break Medusa's line of sight, and solid. The collision
+    // circle is the BASE radius - the widest part - while the gaze only cares
+    // about the shaft, so the two are recorded separately.
+    {
+        Material shaftMaterial = kSandstone;
+        shaftMaterial.uvScale = { 3.0f, 3.0f };
+
+        const float height = Tuning::kPillarHeight;
+        const float shaftD = Tuning::kPillarShaftRadius * 2.0f;
+        const float baseD  = Tuning::kPillarBaseRadius  * 2.0f;
+
+        for (int i = 0; i < Tuning::kPillarCount; ++i)
+        {
+            const float px = Tuning::kPillarX[i];
+            const float pz = Tuning::kPillarZ[i];
+
+            SceneNode* pillar = corridor->createChild("CoverPillar");
+            pillar->position = { px, 0.0f, pz };
+
+            // Every part is remembered, so the whole pillar can fade as one.
+            std::vector<SceneNode*> parts;
+            parts.push_back(add(pillar, "Shaft", &m_cylinder,
+                { 0.0f, height * 0.5f, 0.0f }, { shaftD, height, shaftD }, shaftMaterial));
+            parts.push_back(add(pillar, "Plinth", &m_cylinder,
+                { 0.0f, 0.3f, 0.0f }, { baseD, 0.6f, baseD }, kDarkStone));
+            parts.push_back(add(pillar, "BandLow", &m_torus,
+                { 0.0f, 0.95f, 0.0f }, { shaftD, 0.8f, shaftD }, kGold));
+            parts.push_back(add(pillar, "BandHigh", &m_torus,
+                { 0.0f, height - 1.4f, 0.0f }, { shaftD, 0.8f, shaftD }, kGold));
+            parts.push_back(add(pillar, "Capital", &m_cylinder,
+                { 0.0f, height - 0.3f, 0.0f }, { baseD, 0.6f, baseD }, kDarkStone));
+
+            m_pillarParts.push_back(parts);
+            m_pillarFade.push_back(1.0f);
+
+            coverPillars.push_back({ px, pz, Tuning::kPillarShaftRadius, height });
+            propObstacles.push_back({ px, pz, Tuning::kPillarBaseRadius + 0.02f });
+        }
+    }
+
     // --- shine stones --------------------------------------------------------
     // Crystal clusters bedded into the walls and floor. Between the torches
     // the corridor was simply dark; these pick out its length and give the
@@ -1078,8 +1137,9 @@ void Scene::update(float time, float deltaTime)
     if (medusaHead != nullptr && medusaRoot != nullptr && traveller != nullptr)
     {
         // Aim at the traveller's head, not their feet.
-        const glm::vec3 targetWorld =
-            traveller->worldPosition() + glm::vec3(0.0f, 2.35f, 0.0f);
+        const glm::vec3 targetWorld = gazeDriven
+            ? gazeAim
+            : traveller->worldPosition() + glm::vec3(0.0f, 2.35f, 0.0f);
 
         // Solve the aim in Medusa's own space. Her body is turned -35 degrees,
         // so a world-space angle would be wrong by exactly that much; pulling
@@ -1102,8 +1162,72 @@ void Scene::update(float time, float deltaTime)
         m_head = 1.0f;
 #endif
 
-        medusaHead->rotation.y = aimYaw * m_head;
-        medusaHead->rotation.x = aimPitch * m_head;
+#ifdef TRIAL_DEBUG_AIM
+        const float follow = 1.0f;
+#else
+        const float follow = std::min(1.0f, deltaTime * 20.0f);
+#endif
+        m_headYaw   += Easing::shortestAngleDelta(m_headYaw, aimYaw * m_head) * follow;
+        m_headPitch += (aimPitch * m_head - m_headPitch) * follow;
+
+        medusaHead->rotation.y = m_headYaw;
+        medusaHead->rotation.x = m_headPitch;
+    }
+
+    // --- the gaze made visible -----------------------------------------------
+    if (medusaHead != nullptr)
+    {
+        // Her eyes flare as an attack is charged - the first thing the player
+        // should notice - and smoulder the rest of the time.
+        const float eyeLevel = gazeDriven
+            ? gazeEye
+            : (m_head > 0.01f ? 0.3f + 0.7f * m_head : 0.3f);
+
+        for (const char* eyeName : { "EyeL", "EyeR" })
+        {
+            if (SceneNode* eye = medusaHead->find(eyeName))
+            {
+                eye->material.emissive = Materials::eye.emissive * (0.6f + 2.6f * eyeLevel);
+            }
+        }
+
+        if (gazeBeam != nullptr)
+        {
+            float width  = 0.0f;
+            float length = 0.0f;
+
+            if (gazeDriven)
+            {
+                width  = gazeBeamWidth;
+                length = gazeBeamLength;
+            }
+            else if (m_head > 0.01f && traveller != nullptr)
+            {
+                // The cursed ending: the gaze simply rests on him.
+                width  = Easing::smoothstep01(m_head);
+                length = glm::length(traveller->worldPosition()
+                                     + glm::vec3(0.0f, 2.35f, 0.0f)
+                                     - medusaHead->worldPosition()) + 0.6f;
+            }
+
+            gazeBeam->visible = (width > 0.02f && length > 0.8f);
+
+            if (gazeBeam->visible)
+            {
+                // The full cone matches the angle the gameplay test uses, so
+                // what is lit is what hurts.
+                const float full = 2.0f * length
+                                 * std::tan(glm::radians(Tuning::kGazeConeHalf));
+                const float w = full * width;
+
+                gazeBeam->scale    = { w, length, w };
+                gazeBeam->position = { 0.0f, 0.08f, 0.35f + length * 0.5f };
+
+                gazeBeam->material.opacity  = 0.07f + 0.17f * width;
+                gazeBeam->material.emissive =
+                    glm::vec3(0.35f, 0.95f, 0.25f) * (0.5f + 0.9f * width);
+            }
+        }
     }
 
     // --- petrification indicator -------------------------------------------
@@ -1358,7 +1482,8 @@ void Scene::updateLights(float time)
     }
 
     // --- Medusa's eyes: two narrow spotlights -------------------------------
-    if (medusaHead != nullptr && m_head > 0.01f)
+    const float spotLevel = gazeDriven ? gazeEye : m_head;
+    if (medusaHead != nullptr && spotLevel > 0.01f)
     {
         const glm::vec3 gaze = medusaHead->worldForward();
 
@@ -1374,7 +1499,7 @@ void Scene::updateLights(float time)
             spot.color     = { 0.55f, 1.0f, 0.35f };
             // Fiercer as the stone takes hold, so the gaze is visibly doing
             // the work rather than merely pointing at him.
-            spot.intensity = 6.0f * m_head * (1.0f + 1.1f * m_petrify);
+            spot.intensity = 6.0f * spotLevel * (1.0f + 1.1f * m_petrify);
 
             spot.constant  = 1.0f;
             spot.linear    = 0.05f;
@@ -1514,6 +1639,54 @@ void Scene::updateLights(float time)
     fill.color     = { 0.30f, 0.36f, 0.62f };
     fill.intensity = 0.22f;
     lights.push_back(fill);
+}
+
+void Scene::fadeCoverBetween(const glm::vec3& eye, const glm::vec3& target,
+                             float deltaTime)
+{
+    const float follow = std::min(1.0f, deltaTime * 10.0f);
+
+    for (std::size_t i = 0; i < m_pillarParts.size() && i < coverPillars.size(); ++i)
+    {
+        const CoverPillar& c = coverPillars[i];
+
+        // The segment eye -> target against the pillar's footprint, with a
+        // margin: the pillar should ghost a moment BEFORE it covers him, not
+        // after, or the traveller pops in and out at its edge.
+        const float reach = c.radius + 0.45f;
+
+        const float dx = target.x - eye.x;
+        const float dz = target.z - eye.z;
+        const float fx = eye.x - c.x;
+        const float fz = eye.z - c.z;
+
+        bool occludes = false;
+        const float A = dx * dx + dz * dz;
+        if (A > 1e-6f && std::min(eye.y, target.y) < c.height)
+        {
+            const float B = 2.0f * (fx * dx + fz * dz);
+            const float C = fx * fx + fz * fz - reach * reach;
+            const float disc = B * B - 4.0f * A * C;
+            if (disc >= 0.0f)
+            {
+                const float root = std::sqrt(disc);
+                const float t1 = (-B - root) / (2.0f * A);
+                const float t2 = (-B + root) / (2.0f * A);
+                occludes = (t2 >= 0.0f && t1 <= 1.0f);
+            }
+        }
+
+        const float want = occludes ? 0.25f : 1.0f;
+        m_pillarFade[i] += (want - m_pillarFade[i]) * follow;
+
+        // Snap back to fully opaque once it is close, so the pillar returns
+        // to the opaque pass (and its shadow) instead of lingering at 0.999.
+        const float shown = (m_pillarFade[i] > 0.985f) ? 1.0f : m_pillarFade[i];
+        for (SceneNode* part : m_pillarParts[i])
+        {
+            part->material.opacity = shown;
+        }
+    }
 }
 
 void Scene::draw(const Shader& shader, const glm::vec3& cameraPosition) const

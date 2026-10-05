@@ -426,3 +426,82 @@ The interactive version shows everything the original did, plus:
 
 Keep the old cinematic mode on a key. Being able to show the scripted version *and* the
 playable one is worth more than either alone.
+
+---
+
+## 13. Medusa's gaze and cover  *(added after the first playable version)*
+
+Until now Medusa caught the traveller only by touching him; her eyes were
+lighting, not a weapon. The gaze makes them one.
+
+### The rule
+
+An attack runs **Cooldown -> Telegraph -> Lock -> Sweep**.
+
+| Phase | Length | What the player sees | Can it hurt? |
+|---|---|---|---|
+| Telegraph | 1.1 s | Eyes brighten, a thin tracer follows him, then winds back toward one wall; HUD caps blink | no |
+| Lock | 0.35 s | The aim freezes and the beam goes solid | yes |
+| Sweep | 1.9 s | The beam crosses the whole corridor, +-38 degrees | yes |
+| Cooldown | 1.8 s | Eyes smoulder | no |
+
+Exposure fills while he is **inside the cone AND the eyes can actually see
+him**. Being in the spotlight is not enough: three sight lines (centre and both
+shoulders) are tested against the pillars and the chamber's front wall, so a
+pillar edge gives *partial* exposure instead of flickering. Full bar = stone.
+The bar drains over 3 s once he is clear, and stone slows him by up to 30%.
+
+**Rubble is deliberately not cover** - it is too low to break the line. Only the
+seven tall pillars are.
+
+### Where it lives
+
+| File | Role |
+|---|---|
+| `src/Gaze.h/.cpp` | the whole mechanic; no GL, so it is unit-tested |
+| `src/EscapeTuning.h` | every number, including the pillar layout |
+| `Scene` | pillars, the visible beam, the glowing eyes, ghosting pillars |
+| `Hud` | the petrification bar and the blinking warning caps |
+
+### What the simulation found (40 runs per bot, 60 Hz, real classes)
+
+| Bot | Escapes |
+|---|---|
+| ignores the gaze | **0%** - stoned on the second attack |
+| strafes sideways | **0%** - *worse* than standing still |
+| tucks behind a pillar for the ~1 s the beam passes | **100%** |
+| same, but 0.7 s late and misses 1 attack in 4 | **97.5%** |
+
+Three things this taught, none of which were obvious in advance:
+
+1. **Strafing cannot work.** A +-38 degree sweep covers an 8-wide corridor from
+   any range over about 6 units, and moving *with* the sweep lengthens the time
+   in the beam. Cover is the only counter, and the design now says so plainly.
+2. **Hiding for the whole attack loses.** A bot that stood behind the pillar from
+   the first telegraph to the end of the sweep (~3.4 s) was caught by Medusa
+   100% of the time: she closes ~8 units while he waits. Hiding has to be timed
+   to the ~1 s the beam is actually passing.
+3. **The gaze did nothing at first.** At 0.95 s to fill, one sweep leaves the bar
+   at ~65% and it drains before the next attack, so ignoring it cost nothing.
+   0.75 s makes the first mistake survivable (~87%, and slowed) and the second
+   fatal.
+
+### Two problems only a screenshot could show
+
+- A pillar that hides him from Medusa hides him from the **camera** too, because
+  the chase camera sits on her side. Any pillar between the camera and him now
+  fades to 25%.
+- The camera could cut through a pillar, or sit with a wall torch filling a
+  quarter of the screen. Pillars and torches are now camera obstacles.
+
+### Verified, and not
+
+Verified: the mechanic's rules (`test_gaze`), the slowdown (`test_exposure`), the
+balance above (`test_gazerun`), and the real game end to end with the
+self-playing build - once ignoring the gaze (stoned on the second attack), once
+hiding (`visible=0.00` through all three attacks, `exposure=0.00`, escaped).
+
+**Not** verified: how it *feels*. The sloppy bot is a proxy for a person, not a
+person. In particular the chase camera looks forward while Medusa is behind it,
+so a player cannot see the lane a pillar shades - they work it out from the beam
+stopping on the pillar. Playtest that before trusting the 97.5%.

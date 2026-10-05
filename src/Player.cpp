@@ -13,6 +13,7 @@ void Player::reset(const glm::vec3& position, float headingDegrees)
     m_velocity = glm::vec3(0.0f);
     m_heading  = headingDegrees;
     m_stunRemaining = 0.0f;
+    m_exposureSlow  = 0.0f;
 }
 
 void Player::setBounds(const glm::vec2& minXZ, const glm::vec2& maxXZ)
@@ -103,9 +104,11 @@ void Player::update(const glm::vec3& desiredDirection, float deltaTime)
         direction /= std::sqrt(lengthSquared);
 
         // The cap, not the input, is what a stun changes.
-        const float topSpeed = stunned()
-                             ? Tuning::kPlayerSpeed * Tuning::kStunSpeedFactor
-                             : Tuning::kPlayerSpeed;
+        float topSpeed = stunned()
+                       ? Tuning::kPlayerSpeed * Tuning::kStunSpeedFactor
+                       : Tuning::kPlayerSpeed;
+
+        topSpeed *= 1.0f - Tuning::kExposureSlowdown * m_exposureSlow;
 
         desiredVelocity = direction * topSpeed;
     }

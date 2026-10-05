@@ -46,6 +46,10 @@ public:
 
     void setMaterial(const Material& material) { m_material = material; }
 
+    // Keeps stones from landing inside something solid, such as a pillar. A
+    // stone is made to fall somewhere else instead.
+    void addAvoid(float x, float z, float radius);
+
     // Drops a volley of stones around a point straight away, ignoring the
     // spawn timer. Used to collapse the corridor behind an escaping player.
     void collapseAround(const glm::vec3& centre, int count, float spread);
@@ -99,6 +103,14 @@ private:
     float m_intensity = 1.0f;
     float m_spawnTimer = 0.0f;
     float m_shake      = 0.0f;
+
+    struct Avoid { float x = 0.0f, z = 0.0f, radius = 0.0f; };
+    static constexpr int kMaxAvoid = 16;
+    Avoid m_avoid[kMaxAvoid];
+    int   m_avoidCount = 0;
+
+    // Is a stone of this size clear of everything on the avoid list?
+    bool clearOfAvoid(float x, float z, float stoneRadius) const;
 
     float m_gateZ     = 11.5f;
     float m_halfWidth = 4.0f;

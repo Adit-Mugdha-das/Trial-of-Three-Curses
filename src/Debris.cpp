@@ -129,6 +129,30 @@ bool Debris::nearestThreat(const glm::vec3& from, float lookAhead,
     return found;
 }
 
+void Debris::addAvoid(float x, float z, float radius)
+{
+    if (m_avoidCount >= kMaxAvoid)
+    {
+        return;
+    }
+    m_avoid[m_avoidCount++] = { x, z, radius };
+}
+
+bool Debris::clearOfAvoid(float x, float z, float stoneRadius) const
+{
+    for (int i = 0; i < m_avoidCount; ++i)
+    {
+        const float dx = x - m_avoid[i].x;
+        const float dz = z - m_avoid[i].z;
+        const float reach = m_avoid[i].radius + stoneRadius + 0.1f;
+        if (dx * dx + dz * dz < reach * reach)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 void Debris::spawn(Stone& stone, const glm::vec3& playerPosition)
 {
     // Ahead of him, never on top of him: a stone spawned at his feet would
@@ -148,7 +172,21 @@ void Debris::spawn(Stone& stone, const glm::vec3& playerPosition)
     stone.radius = randomRange(0.42f, 0.88f);
 
     const float margin = m_halfWidth - stone.radius - 0.2f;
-    stone.position = { randomRange(-margin, margin), m_ceilingY, z };
+
+    // A stone dropping through a pillar looks wrong and would be pushed out
+    // of it in a way that reads as a glitch, so re-roll the lane a few times.
+    float x = randomRange(-margin, margin);
+    for (int attempt = 0; attempt < 8 && !clearOfAvoid(x, z, stone.radius); ++attempt)
+    {
+        x = randomRange(-margin, margin);
+    }
+    if (!clearOfAvoid(x, z, stone.radius))
+    {
+        stone.active = false;     // nowhere clear this time; try again later
+        return;
+    }
+
+    stone.position = { x, m_ceilingY, z };
 
     stone.velocity = { 0.0f, 0.0f, 0.0f };
     stone.rotation = { randomRange(0.0f, 360.0f), randomRange(0.0f, 360.0f),
