@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(& \"d:\\\\Trial of Three curses\\\\build.ps1\")"
+    ]
+  }
+}

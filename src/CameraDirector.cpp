@@ -1,0 +1,145 @@
+#include "CameraDirector.h"
+
+#include <cmath>
+
+#include "Easing.h"
+
+namespace
+{
+    float easeAngle(float current, float target, float t)
+    {
+        return current + Easing::shortestAngleDelta(current, target) * t;
+    }
+}
+
+CameraDirector::Shot CameraDirector::shotFor(TrialState state) const
+{
+    switch (state)
+    {
+        case TrialState::Waiting:
+            // Wide establishing shot, from above the doorway looking back
+            // into the chamber. The distance and pitch are chosen so the
+            // camera lands INSIDE the room: before Step D added a front wall
+            // this shot sat at z = 17.8, six units outside it, and the view
+            // opened up buried in stone.
+            return { { 0.0f, 2.6f, -2.0f }, 15.0f, 85.0f, 32.0f };
+
+        case TrialState::Placing:
+            // Pull in on the scale as the heart travels to it.
+            return { { -0.6f, 3.4f, 0.6f }, 11.0f, 74.0f, 18.0f };
+
+        case TrialState::Weighing:
+            // Close on the beam - this is the moment the story turns.
+            return { { -1.4f, 3.9f, -1.2f }, 9.0f, 82.0f, 8.0f };
+
+        case TrialState::Balanced:
+            // Swing left to the lamp and tilt up to follow the energy column.
+            return { { -5.4f, 3.4f, 1.0f }, 12.5f, 30.0f, 14.0f };
+
+        case TrialState::Cursed:
+            // Frame Medusa and the traveller together, so the gaze reads as
+            // travelling between them.
+            // From the right-front corner of the CHAMBER. The old framing put
+            // the camera at z = 14.6, which is past the front wall and
+            // therefore inside the corridor, looking back through stone.
+            return { { 3.0f, 2.4f, 1.5f }, 11.0f, 55.0f, 20.0f };
+
+        case TrialState::TreasureRevealed:
+            // Push in on the treasure, then keep the traveller in frame as
+            // he walks to it.
+            return { { m_follow.x * 0.35f, 2.4f, m_follow.z * 0.35f + 0.5f },
+                     11.0f, 100.0f, 28.0f };
+
+        case TrialState::Escape:
+        {
+            // Chase cam: behind him and looking slightly ahead, so the
+            // corridor and whatever is falling in it are both visible.
+            // yaw 270 puts the camera on the -Z side of its target, which is
+            // behind a traveller running toward +Z.
+            Shot chase;
+
+            // Medusa closes to within 1.6 units of the traveller, while the
+            // camera sits several units further back again - so as she
+            // catches up she ends up directly between the two, filling the
+            // screen at exactly the moment the corridor ahead matters most.
+            //
+            // The answer is to climb and tilt down as she closes, looking
+            // OVER her at the floor ahead. She stays visible low in frame,
+            // the warning rings stay readable, and nothing has to be hidden.
+            const float d = m_danger;
+
+            // Lead further ahead the faster he moves - but less so when she
+            // is close, or the camera slides forward past him.
+            chase.target = m_follow + glm::vec3(
+                0.0f,
+                1.80f - 0.53f * d,
+                3.0f + 2.2f * m_followSpeed * (1.0f - 0.6f * d));
+
+            // Pulling in as she closes keeps the climb under the corridor
+            // ceiling at y = 7.2.
+            chase.distance = 9.0f + 1.8f * m_followSpeed - 2.8f * d;
+            chase.yaw      = 270.0f;
+            chase.pitch    = 18.0f + 20.0f * d;
+            return chase;
+        }
+
+        case TrialState::Escaped:
+            return { m_follow + glm::vec3(0.0f, 1.6f, 0.0f), 9.0f, 250.0f, 14.0f };
+
+        case TrialState::Caught:
+        {
+            // Swing round in front of him to watch the stone take hold.
+            //
+            // The angle has to come from his heading rather than being fixed:
+            // he can be caught anywhere, facing anywhere. A fixed yaw of 75
+            // put the camera at z = 12.16 when he was petrified at his
+            // starting spot - two thirds of a unit inside the front wall.
+            //
+            // A camera in front of a subject facing `h` sits along
+            // (sin h, 0, cos h), and orientationVector() lays that out as
+            // (cos yaw, 0, sin yaw), so yaw = 90 - h.
+            Shot look;
+            look.target   = m_follow + glm::vec3(0.0f, 1.7f, 0.0f);
+            look.distance = 6.5f;
+            look.yaw      = 90.0f - m_followHeading;
+            look.pitch    = 10.0f;
+            return look;
+        }
+
+        case TrialState::Reset:
+            // Back out to the establishing angle, and like it, kept inside.
+            return { { 0.0f, 2.6f, -2.0f }, 15.0f, 85.0f, 36.0f };
+    }
+
+    return { { 0.0f, 2.8f, 0.0f }, 20.0f, 60.0f, 16.0f };
+}
+
+void CameraDirector::update(Camera& camera, TrialState state,
+                            float deltaTime, float time)
+{
+    if (!m_enabled || camera.mode() != CameraMode::Orbit)
+    {
+        return;
+    }
+
+    Shot shot = shotFor(state);
+
+    // A slow drift while nothing is happening, so the establishing shot is
+    // never completely static.
+    if (state == TrialState::Waiting)
+    {
+        shot.yaw += 9.0f * std::sin(time * 0.09f);
+    }
+
+    // Frame-rate independent exponential ease. Deliberately slow for the
+    // cinematic shots; the chase has to keep up with a running player, so it
+    // tracks far harder.
+    const float rate = (state == TrialState::Escape) ? 6.0f : 1.6f;
+    const float t = std::min(1.0f, deltaTime * rate);
+
+    camera.setTarget(camera.target() + (shot.target - camera.target()) * t);
+    camera.setDistance(camera.distance() +
+                       (shot.distance - camera.distance()) * t);
+    camera.setYaw(easeAngle(camera.yaw(), shot.yaw, t));
+    camera.setPitch(easeAngle(camera.pitch(), shot.pitch, t));
+}
