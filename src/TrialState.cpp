@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include "Easing.h"
+#include "EscapeTuning.h"
 
 namespace
 {
@@ -25,6 +26,8 @@ float TrialController::durationOf(TrialState state)
         case TrialState::Waiting:          return 0.0f;
         case TrialState::TreasureRevealed: return 0.0f;
         case TrialState::Escape:           return 0.0f;
+        case TrialState::Sanctuary:        return Tuning::kSanctuaryDuration;
+        case TrialState::Garden:           return Tuning::kGardenDuration;
 
         case TrialState::Placing:          return 2.0f;
         case TrialState::Weighing:         return 3.0f;
@@ -58,6 +61,8 @@ const char* TrialController::stateName() const
         case TrialState::Cursed:           return "Cursed";
         case TrialState::TreasureRevealed: return "Treasure";
         case TrialState::Escape:           return "Escape";
+        case TrialState::Sanctuary:        return "SANCTUARY";
+        case TrialState::Garden:           return "GARDEN";
         case TrialState::Escaped:          return "ESCAPED";
         case TrialState::Caught:           return "CAUGHT";
         case TrialState::Reset:            return "Reset";
@@ -116,10 +121,40 @@ bool TrialController::playerHasControl() const
         case TrialState::Waiting:
         case TrialState::TreasureRevealed:
         case TrialState::Escape:
+        case TrialState::Sanctuary:     // free to move about inside the dome
+        case TrialState::Garden:        // and to wander the garden
             return true;
 
         default:
             return false;
+    }
+}
+
+float TrialController::charm() const
+{
+    if (!m_balanced)
+    {
+        return 0.0f;
+    }
+
+    switch (m_state)
+    {
+        case TrialState::Balanced:
+            // After the lid is open and the column has risen (it is full by
+            // 0.7), so it reads as the Djinn's answer rather than part of the
+            // lamp opening.
+            return Easing::smoothstep01(Easing::clamp01((progress() - 0.55f) / 0.40f));
+
+        case TrialState::TreasureRevealed:
+        case TrialState::Escape:
+        case TrialState::Sanctuary:
+        case TrialState::Garden:
+        case TrialState::Escaped:
+        case TrialState::Caught:
+            return 1.0f;
+
+        default:
+            return 0.0f;
     }
 }
 
@@ -133,6 +168,8 @@ float TrialController::treasureReveal() const
             return Easing::smoothstep01(m_stateTime / 1.5f);
 
         case TrialState::Escape:
+        case TrialState::Sanctuary:
+        case TrialState::Garden:
         case TrialState::Escaped:
         case TrialState::Caught:
             // Only a true heart was ever offered one. Without this test a
@@ -152,6 +189,8 @@ bool TrialController::trialIsOver() const
 {
     return m_state == TrialState::TreasureRevealed
         || m_state == TrialState::Escape
+        || m_state == TrialState::Sanctuary
+        || m_state == TrialState::Garden
         || m_state == TrialState::Escaped
         || m_state == TrialState::Caught;
 }
@@ -169,6 +208,23 @@ void TrialController::reachedExit()
     if (m_state == TrialState::Escape)
     {
         enter(TrialState::Escaped);
+    }
+}
+
+void TrialController::reachedSanctuary()
+{
+    // Only the charm can raise it, and only a true heart was given one.
+    if (m_state == TrialState::Escape && hasCharm())
+    {
+        enter(TrialState::Sanctuary);
+    }
+}
+
+void TrialController::gateSolved()
+{
+    if (m_state == TrialState::Sanctuary)
+    {
+        enter(TrialState::Garden);
     }
 }
 
@@ -208,6 +264,14 @@ void TrialController::enter(TrialState next)
     else if (next == TrialState::Escape)
     {
         std::cout << "  the chamber begins to fall; RUN";
+    }
+    else if (next == TrialState::Sanctuary)
+    {
+        std::cout << "  the charm raises a sanctuary; she cannot cross it - yet";
+    }
+    else if (next == TrialState::Garden)
+    {
+        std::cout << "  the rings align; the gate opens onto a hidden garden";
     }
     else if (next == TrialState::Escaped)
     {
@@ -298,6 +362,13 @@ void TrialController::update(float deltaTime)
             enter(TrialState::Caught);
             break;
 
+        case TrialState::Sanctuary:
+            // The charm is spent and the dome falls. She is waiting.
+            m_wasCaught = true;
+            enter(TrialState::Caught);
+            break;
+
+        case TrialState::Garden:
         case TrialState::Escaped:
         case TrialState::Caught:
             enter(TrialState::Reset);

@@ -36,6 +36,15 @@ public:
     // Until the slab is up, the doorway is solid.
     void setGateOpen(bool open) { m_world.gateOpen = open; }
 
+    // The wall at the corridor's far end (the constellation gate's face).
+    void setEndWall(float z) { m_world.endZ = z; }
+
+    // Once the gate is down he may walk on into the garden.
+    void setGardenOpen(bool open) { m_world.gardenOpen = open; }
+
+    // Keeps him inside a circle - the sanctuary's dome.
+    void keepWithin(const glm::vec3& centre, float radius);
+
     // A standing prop he cannot walk through, as a circle on the floor.
     int addObstacle(float x, float z, float radius, bool active = true,
                     bool rubble = false)

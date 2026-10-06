@@ -582,3 +582,45 @@ a little, and never lands on anyone who keeps moving.
 **Not verified:** how it feels to a person. The chamber blocks are seen cracking and
 tipping at the top of the frame, but they land out of shot, because he is at the door
 by then. Look back with the free camera (TAB) to see them lying there.
+
+---
+
+## 15. Fireflies in the chamber
+
+Sixty fireflies drift around the chamber (`src/Fireflies.h/.cpp`, no GL, unit-tested).
+
+- Each wanders around a home point that slowly drifts round the room, using a soft spring so pushes look natural.
+- They flash on their own rhythm (lit about 40% of each cycle) and keep a faint glow in between.
+- They part around the traveller as he walks through them.
+- They panic when the chamber starts to collapse: about 4x faster, flickering out of time.
+- Drawn as extra glowing points in the particle system's instanced batch (`ParticleSystem::addGlow`): a bright core plus a soft halo, one draw call.
+- One firefly mid-flash casts a small real point light (tight falloff). It is added last and only if the 12-light budget has room. It hands over to a firefly that is just starting to glow, so the light fades rather than jumping.
+- Side fix: burst particles used to vanish whenever the Djinn's column was off (all of the escape), because every particle's alpha was scaled by the emitter. Only the Djinn plume fades with it now.
+
+---
+
+## 16. Less chaos, a brighter gaze - and a correction
+
+Players found the escape too busy to see Medusa's gaze. Changes:
+
+- A stone every **1.3 s** instead of 0.85 s.
+- **Two** corridor beams fall instead of three.
+- About half the dust and chunks from falling stones and sections.
+- The gaze beam is about twice as opaque and bright; her eyes and eye spotlights are brighter.
+
+**Correction to sections 13 and 14.** The balance simulation was nearly deterministic: all
+40 runs of a bot played out the same way. So its percentages were really one timing
+repeated (hence "100%" and "0%"). It now varies where he takes the treasure from and
+how long he hesitates. With that, 60 runs each, collapse on, stone every 1.3 s:
+
+| Bot | Escapes | Stoned | Caught by her |
+|---|---|---|---|
+| ignores the gaze | 18% | 47% | 35% |
+| strafes | 20% | 50% | 30% |
+| hides for every attack | 12% | 2% | 87% |
+| hides, but late and misses 1 in 4 | 63% | 13% | 23% |
+
+Stone frequency barely matters (0.85 s, 1.05 s and 1.3 s are within noise). The real
+lesson: hiding works against the gaze, but hiding for **every** attack lets Medusa
+catch up. The best play is to hide only when the beam would really hit you.
+(These runs end at the old exit; the real game now ends at the sanctuary, a little sooner.)

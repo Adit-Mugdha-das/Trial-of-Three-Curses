@@ -30,6 +30,25 @@ namespace Tuning
     constexpr float kMedusaRampTime   = 9.00f;
     constexpr float kCatchRadius      = 1.6f;
 
+    // --- the sanctuary at the constellation gate -----------------------------
+    // The corridor now ends at a stone gate. Close to it, the Djinn's charm
+    // raises a dome that Medusa cannot cross - for a while.
+    constexpr float kGateSlabZ         = 71.5f;  // the gate across the corridor's end
+    constexpr float kSanctuaryCentreZ  = 67.0f;
+    constexpr float kSanctuaryRadius   = 5.5f;   // big enough for a camera to see the whole gate from inside
+    constexpr float kSanctuaryTriggerZ = 65.0f;  // he is sheltered once past this
+    constexpr float kSanctuaryRise     = 0.8f;   // seconds for the dome to grow
+    constexpr float kSanctuaryDuration = 35.0f;
+    constexpr float kSanctuaryWarning  = 6.0f;   // it flickers for this long first
+
+    // --- the hidden garden beyond the gate ------------------------------------
+    constexpr float kGardenFrontZ    = 74.0f;   // its front wall, where the corridor ends
+    constexpr float kGardenBackZ     = 90.0f;
+    constexpr float kGardenHalfWidth = 9.0f;
+    constexpr float kGateOpenDelay   = 0.6f;    // the rings glow a moment first
+    constexpr float kGateOpenTime    = 2.6f;    // the gate sinking into the floor
+    constexpr float kGardenDuration  = 30.0f;   // then a new traveller (R sooner)
+
     // --- the collapse: ceiling sections breaking away ------------------------
     // Each one cracks (dust trickles out), shudders, tips about the edge it
     // hangs from, then falls and stays down as an obstacle. The chamber's go
@@ -101,7 +120,7 @@ namespace Tuning
     // the time; at 1.10 nothing threatens anyone. At 0.85 a careless run
     // survives 35% of the time and a careful one always does, which is
     // the gradient the warning rings are there to create.
-    constexpr float kStoneInterval   = 0.85f;
+    constexpr float kStoneInterval   = 1.30f;   // was 0.85: too busy to see Medusa's gaze
     // A stone falls for ~0.88 s, in which a running player covers ~4.93
     // units. The spawn band has to STRADDLE that value, or a stone can
     // never be overhead when it lands and the hazard is decorative. The

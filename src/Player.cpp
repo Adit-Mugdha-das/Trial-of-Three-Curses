@@ -44,6 +44,29 @@ float Player::speedFraction() const
     return Easing::clamp01(speed() / Tuning::kPlayerSpeed);
 }
 
+void Player::keepWithin(const glm::vec3& centre, float radius)
+{
+    const float dx = m_position.x - centre.x;
+    const float dz = m_position.z - centre.z;
+    const float distance = std::sqrt(dx * dx + dz * dz);
+    if (distance <= radius || distance < 1e-6f)
+    {
+        return;
+    }
+
+    const glm::vec3 out(dx / distance, 0.0f, dz / distance);
+    m_position.x = centre.x + out.x * radius;
+    m_position.z = centre.z + out.z * radius;
+
+    // Cancel only the outward part, so he slides round the inside of it.
+    const float outward = m_velocity.x * out.x + m_velocity.z * out.z;
+    if (outward > 0.0f)
+    {
+        m_velocity.x -= out.x * outward;
+        m_velocity.z -= out.z * outward;
+    }
+}
+
 void Player::pushOutOf(const glm::vec3& centre, float combinedRadius)
 {
     const float dx = m_position.x - centre.x;

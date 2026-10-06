@@ -42,6 +42,12 @@ public:
         float gazeWarning = 0.0f;
         bool  gazeLive    = false;
 
+        float charm = 0.0f;          // 0..1, the Djinn's charm
+
+        // The sanctuary: the bottom bar becomes the time it has left.
+        bool  sanctuaryActive = false;
+        float sanctuaryLeft   = 0.0f;   // 1 just raised, 0 about to fall
+
         float time = 0.0f;           // for the danger pulse
     };
 

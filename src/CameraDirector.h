@@ -35,6 +35,9 @@ public:
     // of frame - so it tilts up to watch the ceiling break, then settles.
     void setLookUp(float amount01) { m_lookUp = amount01; }
 
+    // Seconds into the current state, for shots that change part way.
+    void setStateTime(float seconds) { m_stateTime = seconds; }
+
     // Which way the traveller is facing, in degrees. The Caught shot swings
     // round to his face, and his face can be pointing anywhere.
     void setFollowHeading(float degrees) { m_followHeading = degrees; }
@@ -56,6 +59,7 @@ private:
     float m_followSpeed = 0.0f;
     float m_danger      = 0.0f;
     float m_lookUp      = 0.0f;
+    float m_stateTime   = 0.0f;
     float m_followHeading = 180.0f;
 
     Shot shotFor(TrialState state) const;

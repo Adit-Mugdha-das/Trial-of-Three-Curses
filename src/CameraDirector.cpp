@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "Easing.h"
+#include "EscapeTuning.h"
 
 namespace
 {
@@ -89,6 +90,32 @@ CameraDirector::Shot CameraDirector::shotFor(TrialState state) const
             return chase;
         }
 
+        case TrialState::Sanctuary:
+            // First from in front of the gate, looking back down the corridor:
+            // the dome going up and Medusa thrown back against it. Then round
+            // to face the gate itself, where the puzzle will be.
+            if (m_stateTime < 4.5f)
+            {
+                return { { 0.0f, 2.6f, Tuning::kSanctuaryCentreZ - 5.0f }, 6.0f, 90.0f, 10.0f };
+            }
+            // Far enough back for the whole gate - rings and sockets - and
+            // high enough to look over his head at it.
+            return { { 0.0f, 3.3f, Tuning::kGateSlabZ - 0.7f }, 8.7f, 270.0f, 14.0f };
+
+        case TrialState::Garden:
+            // Watch the gate sink, from where the puzzle was seen...
+            if (m_stateTime < 3.6f)
+            {
+                return { { 0.0f, 3.3f, Tuning::kGateSlabZ - 0.7f }, 8.7f, 270.0f, 14.0f };
+            }
+            // ...follow him in...
+            if (m_stateTime < 20.0f)
+            {
+                return { m_follow + glm::vec3(0.0f, 1.6f, 2.0f), 7.5f, 270.0f, 18.0f };
+            }
+            // ...and pull back high over the garden for the last of it.
+            return { { 0.0f, 1.5f, 82.0f }, 10.5f, 20.0f, 35.0f };
+
         case TrialState::Escaped:
             return { m_follow + glm::vec3(0.0f, 1.6f, 0.0f), 9.0f, 250.0f, 14.0f };
 
@@ -109,6 +136,16 @@ CameraDirector::Shot CameraDirector::shotFor(TrialState state) const
             look.distance = 6.5f;
             look.yaw      = 90.0f - m_followHeading;
             look.pitch    = 10.0f;
+
+            // Caught at the gate, facing it: in front of his face is behind
+            // the gate. Watch from behind and to one side instead, with the
+            // gate he could not open in the background.
+            if (m_follow.z > Tuning::kSanctuaryTriggerZ - 1.0f)
+            {
+                look.distance = 5.5f;
+                look.yaw      = 235.0f;
+                look.pitch    = 14.0f;
+            }
             return look;
         }
 
@@ -140,7 +177,9 @@ void CameraDirector::update(Camera& camera, TrialState state,
     // Frame-rate independent exponential ease. Deliberately slow for the
     // cinematic shots; the chase has to keep up with a running player, so it
     // tracks far harder.
-    const float rate = (state == TrialState::Escape) ? 6.0f : 1.6f;
+    const float rate = (state == TrialState::Escape)    ? 6.0f
+                     : (state == TrialState::Sanctuary) ? 3.0f   // two shots in a few seconds
+                                                        : 1.6f;
     const float t = std::min(1.0f, deltaTime * rate);
 
     camera.setTarget(camera.target() + (shot.target - camera.target()) * t);

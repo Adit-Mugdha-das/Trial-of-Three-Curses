@@ -170,8 +170,28 @@ void WorldShape::collide(glm::vec3& position, glm::vec3& velocity,
     }
     else
     {
-        // --- inside the corridor ---
-        clampX(-corridorHalfWidth + radius, corridorHalfWidth - radius);
-        clampZ(gateZ, exitZ + 4.0f);
+        const float wallHalf = 0.3f;
+        if (gardenOpen && position.z > gardenFrontZ - wallHalf)
+        {
+            // --- inside the garden (or in its doorway) ---
+            clampX(-(gardenHalfWidth - wallHalf) + radius, (gardenHalfWidth - wallHalf) - radius);
+            clampZ(gateZ, gardenBackZ - wallHalf - radius);
+
+            // Its front wall, either side of the opening the corridor comes
+            // through. Out there you are inside it - or behind it.
+            const bool besideOpening = std::fabs(position.x) > corridorHalfWidth - radius;
+            if (besideOpening && position.z < gardenFrontZ + wallHalf + radius)
+            {
+                position.z = gardenFrontZ + wallHalf + radius;
+                velocity.z = std::max(0.0f, velocity.z);
+            }
+        }
+        else
+        {
+            // --- inside the corridor ---
+            clampX(-corridorHalfWidth + radius, corridorHalfWidth - radius);
+            const float far = gardenOpen ? gardenFrontZ : std::min(exitZ + 4.0f, endZ - radius);
+            clampZ(gateZ, far);
+        }
     }
 }

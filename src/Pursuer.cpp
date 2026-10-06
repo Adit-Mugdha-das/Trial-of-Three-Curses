@@ -83,6 +83,42 @@ bool Pursuer::hasCaught(const glm::vec3& target) const
     return (dx * dx + dz * dz) < (Tuning::kCatchRadius * Tuning::kCatchRadius);
 }
 
+bool Pursuer::holdOutside(const glm::vec3& centre, float radius)
+{
+    if (radius <= 0.0f)
+    {
+        return false;
+    }
+
+    const float reach = radius + kBodyRadius;
+    const float dx = m_position.x - centre.x;
+    const float dz = m_position.z - centre.z;
+    const float d2 = dx * dx + dz * dz;
+    if (d2 >= reach * reach)
+    {
+        return false;
+    }
+
+    // Straight back out along the line from the centre. As the dome grows
+    // this shoves her back with it.
+    glm::vec3 away(0.0f, 0.0f, -1.0f);
+    if (d2 > 1e-6f)
+    {
+        const float d = std::sqrt(d2);
+        away = glm::vec3(dx / d, 0.0f, dz / d);
+    }
+    m_position.x = centre.x + away.x * reach;
+    m_position.z = centre.z + away.z * reach;
+
+    const float inward = m_velocity.x * away.x + m_velocity.z * away.z;
+    if (inward < 0.0f)
+    {
+        m_velocity.x -= away.x * inward;
+        m_velocity.z -= away.z * inward;
+    }
+    return true;
+}
+
 void Pursuer::update(const glm::vec3& target, float deltaTime)
 {
     if (!m_active)

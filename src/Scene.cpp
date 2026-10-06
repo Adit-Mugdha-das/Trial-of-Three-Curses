@@ -145,6 +145,7 @@ void Scene::build()
     m_cylinder.upload(Primitives::cylinder(0.5f, 1.0f, 32));
     m_cone.upload(Primitives::cone(0.5f, 1.0f, 32));
     m_torus.upload(Primitives::torus(0.5f, 0.14f, 40, 20));
+    m_thinTorus.upload(Primitives::torus(0.5f, 0.035f, 64, 10));
     m_plane.upload(Primitives::plane(1.0f, 1.0f, 12));
 
     m_root = std::make_unique<SceneNode>("Root");
@@ -156,7 +157,11 @@ void Scene::build()
     buildTraveller();
     buildTreasure();
     buildAnubisStatue();
+    buildCharm();
     buildCorridor();
+    buildGate();
+    buildSanctuary();
+    buildGarden();
     buildCeilingWork();
 
     m_root->updateWorld();
@@ -517,6 +522,22 @@ void Scene::applyTrial(const TrialController& trial)
     petrifyTarget  = trial.petrification();
     treasureReveal = trial.treasureReveal();
 
+    m_charmFlight = trial.charm();
+    m_charmScale  = (m_charmFlight > 0.0f) ? 1.0f : 0.0f;
+    m_charmPower  = 1.0f;
+
+    if (state == TrialState::Reset && trial.isBalanced())
+    {
+        // It does not fly home - it fades out of the air where he stands.
+        m_charmFlight = 1.0f;
+        m_charmScale  = 1.0f - Easing::smoothstep01(Easing::clamp01(t / 0.35f));
+    }
+    else if (state == TrialState::Caught)
+    {
+        // It could not save him: the glow drains as the stone takes hold.
+        m_charmPower = 1.0f - 0.85f * Easing::smoothstep01(t);
+    }
+
     switch (state)
     {
         case TrialState::Waiting:
@@ -577,6 +598,23 @@ void Scene::applyTrial(const TrialController& trial)
             heartPlace     = 1.0f;
             headTarget     = 1.0f;
             snakeAgitation = 1.0f;
+            break;
+
+        case TrialState::Sanctuary:
+            // Held at the dome, she glares and the snakes thrash - but her
+            // gaze cannot cross it (see the beam below).
+            beamTarget     = trial.verdictAngle();
+            heartPlace     = 1.0f;
+            headTarget     = 1.0f;
+            snakeAgitation = 1.0f;
+            break;
+
+        case TrialState::Garden:
+            // She turns away from the light; the garden's moonlight grows.
+            beamTarget     = trial.verdictAngle();
+            heartPlace     = 1.0f;
+            snakeAgitation = 0.5f;
+            exitGlow       = Easing::smoothstep01(Easing::clamp01(t * 10.0f));
             break;
 
         case TrialState::Escaped:
@@ -929,9 +967,11 @@ void Scene::buildCorridor()
     // --- the way out ----------------------------------------------------------
     // An archway and a bright doorway, so the goal is visible from the moment
     // the gate opens. A chase needs somewhere to run TO.
+    // Now a gold strip along the top of the constellation gate. As a deep
+    // arch in front of the gate it hid the top of the outer ring.
     add(corridor, "ExitArch", &m_cube,
-        { 0.0f, 6.0f, Tuning::kExitZ },
-        { halfW * 2.0f + 1.0f, 2.4f, 0.8f }, kGold);
+        { 0.0f, 6.85f, Tuning::kGateSlabZ - 0.45f },
+        { halfW * 2.0f + 0.6f, 0.3f, 0.3f }, kGold);
 }
 
 void Scene::buildTreasure()
@@ -1189,7 +1229,7 @@ void Scene::update(float time, float deltaTime)
         {
             if (SceneNode* eye = medusaHead->find(eyeName))
             {
-                eye->material.emissive = Materials::eye.emissive * (0.6f + 2.6f * eyeLevel);
+                eye->material.emissive = Materials::eye.emissive * (0.8f + 3.6f * eyeLevel);
             }
         }
 
@@ -1203,7 +1243,7 @@ void Scene::update(float time, float deltaTime)
                 width  = gazeBeamWidth;
                 length = gazeBeamLength;
             }
-            else if (m_head > 0.01f && traveller != nullptr)
+            else if (m_head > 0.01f && traveller != nullptr && sanctuaryLevel < 0.05f)
             {
                 // The cursed ending: the gaze simply rests on him.
                 width  = Easing::smoothstep01(m_head);
@@ -1225,9 +1265,10 @@ void Scene::update(float time, float deltaTime)
                 gazeBeam->scale    = { w, length, w };
                 gazeBeam->position = { 0.0f, 0.08f, 0.35f + length * 0.5f };
 
-                gazeBeam->material.opacity  = 0.07f + 0.17f * width;
+                // Strong enough to read through dust and falling stone.
+                gazeBeam->material.opacity  = 0.12f + 0.30f * width;
                 gazeBeam->material.emissive =
-                    glm::vec3(0.35f, 0.95f, 0.25f) * (0.5f + 0.9f * width);
+                    glm::vec3(0.35f, 0.95f, 0.25f) * (0.8f + 1.5f * width);
             }
         }
     }
@@ -1364,6 +1405,145 @@ void Scene::update(float time, float deltaTime)
                 dressFlame(flame, { 0.36f, 0.52f, 0.36f },
                            powerOf(Collapse::kChamberTorches + static_cast<int>(i)));
             }
+        }
+    }
+
+    // --- the gate opening, and the garden's relics --------------------------------
+    if (m_gateRoot != nullptr)
+    {
+        // Straight down into the floor, which hides it as it goes.
+        m_gateRoot->position.y = -7.4f * Easing::smoothstep01(gardenOpen);
+        m_gateRoot->visible = gardenOpen < 0.999f;
+    }
+    for (std::size_t i = 0; i < m_relicSpinners.size(); ++i)
+    {
+        m_relicSpinners[i]->rotation.y = time * 20.0f + 120.0f * static_cast<float>(i);
+    }
+    if (m_relicOrb != nullptr)
+    {
+        m_relicOrb->material.emissive = glm::vec3(0.2f, 0.7f, 0.8f)
+                                      * (0.7f + 0.3f * std::sin(time * 1.6f));
+    }
+
+    // --- the traveller as a ghost, while he stands between camera and gate ----
+    m_ghost += (Easing::clamp01(travellerGhost) - m_ghost) * std::min(1.0f, deltaTime * 4.0f);
+    for (SceneNode* part : { travellerLegL, travellerLegR, travellerTorso,
+                             travellerHead, travellerArmL, travellerArmR })
+    {
+        if (part == nullptr) { continue; }
+        // Back to exactly opaque when it is over, so he returns to the
+        // opaque pass and casts his shadow again.
+        part->material.opacity = (m_ghost < 0.01f) ? 1.0f : 1.0f - 0.7f * m_ghost;
+    }
+
+    // --- the gate's rings --------------------------------------------------------
+    // Each turns about its centre by the puzzle's angle. The selected one's
+    // rim glows gold and its notch brightens; once all three lock, every rim
+    // and notch turns the charm's cyan.
+    for (int k = 0; k < static_cast<int>(gateRings.size()) && k < 3; ++k)
+    {
+        SceneNode* ring = gateRings[k];
+        // As the gate sinks the rings spin, alternately, one last time.
+        const float spin = 360.0f * Easing::smoothstep01(gardenOpen)
+                         * ((k % 2 == 0) ? 1.0f : -1.0f);
+        ring->rotation = { 0.0f, 0.0f, gateRingAngle[k] + spin };
+
+        const bool  chosen = (k == gateSelected);
+        const float pulse  = 0.5f + 0.5f * std::sin(time * 6.0f);
+
+        glm::vec3 rimGlow = chosen ? glm::vec3(0.9f, 0.65f, 0.15f) * (0.45f + 0.35f * pulse)
+                                   : glm::vec3(0.0f);
+        glm::vec3 notchGlow = glm::vec3(0.55f, 0.42f, 0.12f) * (chosen ? 1.8f : 1.0f);
+
+        const float lock = Easing::clamp01(gateLock);
+        rimGlow   = glm::mix(rimGlow,   glm::vec3(0.35f, 0.95f, 1.1f) * 1.2f, lock);
+        notchGlow = glm::mix(notchGlow, glm::vec3(0.40f, 1.0f, 1.2f) * 1.6f, lock);
+
+        if (SceneNode* rim = ring->find("Rim"))     { rim->material.emissive = rimGlow; }
+        if (SceneNode* notch = ring->find("Notch")) { notch->material.emissive = notchGlow; }
+    }
+
+    // --- the sanctuary ----------------------------------------------------------
+    if (sanctuaryDome != nullptr)
+    {
+        const float level = Easing::clamp01(sanctuaryLevel);
+        const float radius = Tuning::kSanctuaryRadius * level;
+
+        sanctuaryDome->visible = level > 0.01f;
+        sanctuaryDome->scale   = { 2.0f * radius, 1.7f * radius, 2.0f * radius };
+
+        // A slow shimmer; a flare where she presses on it; a stutter in its
+        // last seconds, so the player knows it is about to give.
+        const float shimmer = 0.85f + 0.15f * std::sin(time * 3.1f);
+        const float flicker = 1.0f - 0.65f * sanctuaryWarning
+                                   * (0.5f + 0.5f * std::sin(time * 18.0f));
+
+        sanctuaryDome->material.emissive =
+            glm::vec3(0.25f, 0.75f, 0.90f) * (shimmer + 1.4f * sanctuaryFlash) * flicker;
+        sanctuaryDome->material.opacity =
+            (0.10f + 0.10f * sanctuaryFlash) * flicker;
+
+        for (std::size_t i = 0; i < m_runes.size(); ++i)
+        {
+            m_runes[i]->visible  = level > 0.01f;
+            m_runes[i]->position = glm::vec3(0.0f, 0.0f, Tuning::kSanctuaryCentreZ)
+                                 + m_runeOffsets[i] * level;
+            m_runes[i]->material.emissive = glm::vec3(0.35f, 0.9f, 1.0f)
+                * (0.6f + 0.4f * std::sin(time * 2.0f + static_cast<float>(i))) * flicker;
+        }
+    }
+
+    // --- the charm --------------------------------------------------------------
+    if (charm != nullptr && traveller != nullptr)
+    {
+        m_charmOrbit += deltaTime * 75.0f;
+        m_charmSpin  += deltaTime * 140.0f;
+
+        // Its place beside him: a slow circle at shoulder height, bobbing.
+        const float a = glm::radians(m_charmOrbit);
+        const glm::vec3 orbit = traveller->position + glm::vec3(
+            std::cos(a) * 0.95f, 2.3f + 0.12f * std::sin(time * 2.3f), std::sin(a) * 0.95f);
+
+        glm::vec3 place = orbit;
+        if (m_charmFlight < 1.0f)
+        {
+            // Out of the top of the column and over in an arc, like the
+            // heart's - a quadratic Bezier with its apex lifted.
+            const glm::vec3 from = djinnEmitterPosition() + glm::vec3(0.0f, 2.6f, 0.0f);
+            const glm::vec3 apex = (from + orbit) * 0.5f + glm::vec3(0.0f, 2.2f, 0.0f);
+            const float u = m_charmFlight;
+            place = glm::mix(glm::mix(from, apex, u), glm::mix(apex, orbit, u), u);
+        }
+
+        // When the sanctuary rises the charm leaves him and hangs at the top
+        // of the dome, holding it up.
+        // High under the ceiling, above the dome's crown: lower down, it hung
+        // right in front of both sanctuary camera shots.
+        const float holding = Easing::smoothstep01(sanctuaryLevel);
+        if (holding > 0.0f)
+        {
+            // It guards the edge she presses against, up under the ceiling:
+            // between her and him, and behind or above both sanctuary camera
+            // shots, so it never covers the gate's rings.
+            const glm::vec3 hover(0.0f, 5.5f + 0.1f * std::sin(time * 1.7f),
+                                  Tuning::kSanctuaryCentreZ - Tuning::kSanctuaryRadius + 0.3f);
+            place = glm::mix(place, hover, holding);
+        }
+
+        charm->position = place;
+        charm->rotation = { 0.0f, m_charmSpin, 18.0f };
+        charm->scale    = glm::vec3((0.35f + 0.65f * m_charmFlight) * m_charmScale
+                                    * (1.0f - 0.3f * holding));
+
+        // Hidden in first person: it would sweep past the lens.
+        const bool firstPerson = (travellerHead != nullptr && !travellerHead->visible);
+        charm->visible = m_charmFlight > 0.001f && m_charmScale > 0.01f && !firstPerson;
+
+        if (charmGem != nullptr)
+        {
+            const float pulse = 0.85f + 0.15f * std::sin(time * 5.0f);
+            charmGem->material.emissive =
+                glm::vec3(0.35f, 0.95f, 1.0f) * (0.35f + 0.65f * m_charmPower) * pulse;
         }
     }
 
@@ -1534,7 +1714,7 @@ void Scene::updateLights(float time)
             spot.color     = { 0.55f, 1.0f, 0.35f };
             // Fiercer as the stone takes hold, so the gaze is visibly doing
             // the work rather than merely pointing at him.
-            spot.intensity = 6.0f * spotLevel * (1.0f + 1.1f * m_petrify);
+            spot.intensity = 8.0f * spotLevel * (1.0f + 1.1f * m_petrify);
 
             spot.constant  = 1.0f;
             spot.linear    = 0.05f;
@@ -1665,9 +1845,20 @@ void Scene::updateLights(float time)
     {
         Light exitLight;
         exitLight.type      = LightType::Point;
-        exitLight.position  = { 0.0f, 4.2f, Tuning::kExitZ + 1.5f };
+        exitLight.position  = { 0.0f, 4.2f, Tuning::kGateSlabZ - 1.1f };   // lights the gate's face
         exitLight.color     = { 0.80f, 0.90f, 1.0f };
         exitLight.intensity = 5.5f + 14.0f * Easing::clamp01(exitGlow);
+
+        // Once the gate is down it becomes the garden's moonlight: high over
+        // the relics, cool, reaching every wall.
+        if (gardenOpen > 0.01f)
+        {
+            exitLight.position  = { 0.0f, 8.0f, 82.0f };
+            exitLight.color     = { 0.72f, 0.82f, 1.0f };
+            exitLight.intensity = 2.5f + 3.5f * Easing::smoothstep01(gardenOpen);
+            exitLight.linear    = 0.04f;
+            exitLight.quadratic = 0.004f;
+        }
         exitLight.constant  = 1.0f;
         exitLight.linear    = 0.05f;
         exitLight.quadratic = 0.006f;
@@ -1682,6 +1873,445 @@ void Scene::updateLights(float time)
     fill.color     = { 0.30f, 0.36f, 0.62f };
     fill.intensity = 0.22f;
     lights.push_back(fill);
+
+    // --- the charm protecting him ----------------------------------------------
+    // A small cold glow that travels with him down the dark corridor.
+    if (charm != nullptr && m_charmFlight > 0.01f && m_charmScale > 0.01f
+        && static_cast<int>(lights.size()) < kMaxLights)
+    {
+        Light glow;
+        glow.type      = LightType::Point;
+        glow.position  = charm->position;
+        glow.color     = { 0.35f, 0.90f, 1.0f };
+        // Much brighter and wider while it holds the sanctuary up: it is the
+        // dome's light source.
+        const float holding = Easing::clamp01(sanctuaryLevel);
+        glow.intensity = (1.6f + 2.6f * holding) * m_charmFlight * m_charmScale * m_charmPower;
+        glow.constant  = 1.0f;
+        glow.linear    = Easing::mix(0.30f, 0.10f, holding);
+        glow.quadratic = Easing::mix(0.45f, 0.04f, holding);
+        lights.push_back(glow);
+    }
+
+    // --- a firefly mid-flash ----------------------------------------------------
+    // The one light in the scene that wanders. Very tight falloff, so it
+    // pools on whatever it drifts past and lights nothing across the room.
+    // Added last and only if there is room: the room's own lights come first.
+    if (fireflyLightLevel > 0.01f && static_cast<int>(lights.size()) < kMaxLights)
+    {
+        Light firefly;
+        firefly.type      = LightType::Point;
+        firefly.position  = fireflyLightPosition;
+        firefly.color     = { 0.65f, 1.0f, 0.30f };
+        firefly.intensity = 1.8f * fireflyLightLevel;
+        firefly.constant  = 1.0f;
+        firefly.linear    = 0.4f;
+        firefly.quadratic = 0.9f;
+        lights.push_back(firefly);
+    }
+}
+
+void Scene::buildGate()
+{
+    // The constellation gate: a slab right across the end of the corridor with
+    // three concentric stone rings on its face. Each ring is a disc; the
+    // smaller ones sit in front of the bigger, so what shows of each is a
+    // band. Each hangs from its own pivot at the shared centre, so turning
+    // one is a single rotation about Z - the rings, their rims, their gold
+    // notches and carved marks all turn together.
+    SceneNode* gateRoot = m_root->createChild("ConstellationGate");
+    m_gateRoot = gateRoot;
+
+    const float z      = Tuning::kGateSlabZ;
+    const float face   = z - 0.3f;
+    const float centreY = 3.3f;
+
+    Material slab = kSandstone;
+    slab.uvScale = { 3.0f, 2.5f };
+    add(gateRoot, "Slab", &m_cube, { 0.0f, 3.5f, z },
+        { Tuning::kCorridorHalfWidth * 2.0f + 0.6f, 7.0f, 0.6f }, slab);
+
+    Material notchGlow = kGold;
+    notchGlow.emissive = { 0.55f, 0.42f, 0.12f };
+
+    Material carving;
+    carving.ka = { 0.02f, 0.02f, 0.02f };
+    carving.kd = { 0.06f, 0.05f, 0.04f };
+    carving.ks = { 0.0f, 0.0f, 0.0f };
+
+    const float radius[3]    = { 2.5f, 1.8f, 1.1f };   // outer, middle, inner
+    const float bandMiddle[3] = { 2.15f, 1.45f, 0.8f }; // where each band shows
+
+    gateCentre = { 0.0f, centreY, face };
+    for (int k = 0; k < 3; ++k) { gateBand[k] = bandMiddle[k]; }
+    gateSocketRadius = 2.9f;
+    const Material* stone[3] = { &kStone, &kSandstone, &kDarkStone };
+
+    for (int k = 0; k < 3; ++k)
+    {
+        SceneNode* pivot = gateRoot->createChild("GateRing");
+        pivot->position = { 0.0f, centreY, face - 0.1f * static_cast<float>(k + 1) };
+
+        SceneNode* disc = add(pivot, "Disc", &m_cylinder, { 0.0f, 0.0f, 0.0f },
+                              { 2.0f * radius[k], 0.16f, 2.0f * radius[k] }, *stone[k]);
+        disc->rotation = { 90.0f, 0.0f, 0.0f };   // its axis now along Z
+
+        SceneNode* rim = add(pivot, "Rim", &m_thinTorus, { 0.0f, 0.0f, -0.08f },
+                             { 2.0f * radius[k], 2.0f * radius[k], 2.0f * radius[k] }, kGold);
+        rim->rotation = { 90.0f, 0.0f, 0.0f };
+
+        // The notch: the one gold arrow on the band, pointing outward. Part 3
+        // turns the rings until each notch matches the fireflies' pattern.
+        add(pivot, "Notch", &m_cone, { 0.0f, bandMiddle[k], -0.12f },
+            { 0.36f, 0.42f, 0.16f }, notchGlow);
+
+        // Carved marks round the rest of the band, so its turning shows.
+        for (int m = 1; m < 6; ++m)
+        {
+            const float a = glm::radians(60.0f * static_cast<float>(m));
+            SceneNode* mark = add(pivot, "Mark", &m_cube,
+                                  { std::sin(a) * bandMiddle[k], std::cos(a) * bandMiddle[k], -0.09f },
+                                  { 0.08f, 0.32f, 0.03f }, carving);
+            mark->rotation = { 0.0f, 0.0f, -60.0f * static_cast<float>(m) };
+        }
+
+        gateRings.push_back(pivot);
+    }
+
+    // The boss at the centre, and six sockets round the outside where the
+    // fireflies will settle to show the pattern.
+    add(gateRoot, "Boss", &m_sphere, { 0.0f, centreY, face - 0.42f },
+        { 0.9f, 0.9f, 0.45f }, kGold);
+
+    for (int i = 0; i < 6; ++i)
+    {
+        const float a = glm::radians(60.0f * static_cast<float>(i));
+        add(gateRoot, "Socket", &m_sphere,
+            { std::sin(a) * 2.9f, centreY + std::cos(a) * 2.9f, face - 0.04f },
+            { 0.32f, 0.32f, 0.12f }, kDarkStone);
+    }
+}
+
+void Scene::buildSanctuary()
+{
+    // A half-sphere of cold light (the floor hides the lower half), drawn in
+    // the transparent pass, which does not cull - so it shows from inside too.
+    sanctuaryDome = m_root->createChild("SanctuaryDome");
+    sanctuaryDome->mesh = &m_sphere;
+    sanctuaryDome->position = { 0.0f, 0.0f, Tuning::kSanctuaryCentreZ };
+    sanctuaryDome->visible = false;
+
+    Material dome;
+    dome.ka = { 0.0f, 0.0f, 0.0f };
+    dome.kd = { 0.0f, 0.0f, 0.0f };
+    dome.ks = { 0.3f, 0.5f, 0.6f };
+    dome.shininess = 48.0f;
+    dome.emissive = { 0.25f, 0.75f, 0.90f };
+    dome.opacity  = 0.12f;
+    sanctuaryDome->material = dome;
+
+    // Rune stones round its foot, wherever the circle crosses open floor.
+    Material rune;
+    rune.ka = { 0.02f, 0.05f, 0.06f };
+    rune.kd = { 0.10f, 0.30f, 0.35f };
+    rune.ks = { 0.6f, 0.9f, 1.0f };
+    rune.emissive = { 0.35f, 0.9f, 1.0f };
+
+    for (int i = 0; i < 32; ++i)
+    {
+        const float a = glm::radians(360.0f * static_cast<float>(i) / 32.0f);
+        const glm::vec3 offset(std::sin(a) * Tuning::kSanctuaryRadius * 0.97f, 0.03f,
+                               std::cos(a) * Tuning::kSanctuaryRadius * 0.97f);
+        if (std::fabs(offset.x) > Tuning::kCorridorHalfWidth - 0.2f) { continue; }
+        if (Tuning::kSanctuaryCentreZ + offset.z > Tuning::kGateSlabZ - 0.35f) { continue; }
+
+        SceneNode* stone = add(m_root.get(), "Rune", &m_sphere, offset,
+                               { 0.3f, 0.06f, 0.3f }, rune);
+        stone->visible = false;
+        m_runes.push_back(stone);
+        m_runeOffsets.push_back(offset);
+    }
+}
+
+void Scene::buildGarden()
+{
+    // A small walled garden open to the night sky, beyond the constellation
+    // gate. Built from the same seven primitives as everything else.
+    SceneNode* garden = m_root->createChild("HiddenGarden");
+
+    const float front = Tuning::kGardenFrontZ;
+    const float back  = Tuning::kGardenBackZ;
+    const float half  = Tuning::kGardenHalfWidth;
+    const float midZ  = (front + back) * 0.5f;
+    const float depth = back - front;
+
+    std::mt19937 rng(424242u);
+    auto random = [&rng](float low, float high)
+    {
+        std::uniform_real_distribution<float> dist(low, high);
+        return dist(rng);
+    };
+
+    // --- materials ---------------------------------------------------------------
+    Material grass;
+    // A deeper green than it looks here: the moonlight washes it out.
+    grass.ka = { 0.03f, 0.07f, 0.02f };  grass.kd = { 0.08f, 0.30f, 0.06f };
+    grass.ks = { 0.02f, 0.04f, 0.02f };  grass.shininess = 6.0f;
+
+    // Leaves get more ambient and a faint glow of their own: lit only from
+    // above by the moon, the fronds and bushes read as black silhouettes.
+    Material leaf = grass;
+    leaf.ka = { 0.06f, 0.16f, 0.05f };  leaf.kd = { 0.20f, 0.55f, 0.16f };
+    leaf.ks = { 0.15f, 0.25f, 0.15f };  leaf.emissive = { 0.02f, 0.07f, 0.02f };
+    Material darkLeaf = leaf;
+    darkLeaf.kd = { 0.12f, 0.40f, 0.12f };  darkLeaf.emissive = { 0.015f, 0.05f, 0.015f };
+    Material trunk;
+    trunk.ka = { 0.05f, 0.04f, 0.03f };  trunk.kd = { 0.36f, 0.25f, 0.15f };
+    trunk.ks = { 0.05f, 0.05f, 0.05f };  trunk.shininess = 6.0f;
+
+    Material water;
+    water.ka = { 0.02f, 0.05f, 0.08f };  water.kd = { 0.08f, 0.25f, 0.38f };
+    water.ks = { 0.9f, 0.95f, 1.0f };    water.shininess = 96.0f;
+    water.emissive = { 0.02f, 0.06f, 0.09f };
+    water.opacity = 0.75f;
+
+    Material relicGold = kGold;
+    relicGold.emissive = { 0.35f, 0.26f, 0.08f };
+
+    Material crystal;
+    crystal.ka = { 0.05f, 0.14f, 0.16f };  crystal.kd = { 0.14f, 0.52f, 0.58f };
+    crystal.ks = { 0.75f, 0.95f, 1.0f };   crystal.shininess = 96.0f;
+    crystal.emissive = { 0.2f, 0.7f, 0.8f };
+    crystal.opacity = 0.88f;
+
+    Material sky;
+    sky.ka = { 0.0f, 0.0f, 0.0f };  sky.kd = { 0.0f, 0.0f, 0.0f };  sky.ks = { 0.0f, 0.0f, 0.0f };
+
+    Material wallMat = kSandstone;
+    wallMat.uvScale = { 6.0f, 2.0f };
+
+    // --- ground and walls ----------------------------------------------------------
+    add(garden, "Lawn", &m_plane, { 0.0f, 0.001f, midZ }, { 2.0f * half, 1.0f, depth }, grass);
+
+    add(garden, "WallL", &m_cube, { -(half + 0.3f), 3.0f, midZ }, { 0.6f, 6.0f, depth + 0.6f }, wallMat);
+    add(garden, "WallR", &m_cube, {  (half + 0.3f), 3.0f, midZ }, { 0.6f, 6.0f, depth + 0.6f }, wallMat);
+    add(garden, "WallBack", &m_cube, { 0.0f, 3.0f, back + 0.3f }, { 2.0f * half + 1.2f, 6.0f, 0.6f }, wallMat);
+    const float sideW = half - Tuning::kCorridorHalfWidth;
+    for (float side : { -1.0f, 1.0f })
+    {
+        add(garden, "WallFront", &m_cube,
+            { side * (Tuning::kCorridorHalfWidth + sideW * 0.5f + 0.3f), 3.0f, front },
+            { sideW + 0.6f, 6.0f, 0.6f }, wallMat);
+    }
+
+    // Ivy hanging down the walls.
+    for (int i = 0; i < 18; ++i)
+    {
+        const float len = random(1.2f, 3.6f);
+        const float side = (i % 2 == 0) ? -1.0f : 1.0f;
+        const float z = front + 1.0f + random(0.0f, depth - 2.0f);
+        add(garden, "Ivy", &m_cube, { side * (half - 0.02f), 6.0f - len * 0.5f, z },
+            { 0.08f, len, random(0.25f, 0.6f) }, (i % 3 == 0) ? leaf : darkLeaf);
+    }
+
+    // --- a path of stepping stones to the relics ---------------------------------------
+    for (int i = 0; i < 4; ++i)
+    {
+        add(garden, "SteppingStone", &m_cylinder,
+            { random(-0.2f, 0.2f), 0.04f, front + 1.0f + 1.4f * static_cast<float>(i) },
+            { 0.95f, 0.08f, 0.95f }, kStone);
+    }
+
+    // --- the three relics ----------------------------------------------------------------
+    // The ankh, on a stepped pedestal at the heart of the garden. It turns slowly.
+    {
+        const glm::vec3 at(0.0f, 0.0f, front + 7.5f);
+        SceneNode* relic = garden->createChild("RelicAnkh");
+        relic->position = at;
+        add(relic, "Step1", &m_cube, { 0.0f, 0.2f, 0.0f }, { 2.0f, 0.4f, 2.0f }, kSandstone);
+        add(relic, "Step2", &m_cube, { 0.0f, 0.6f, 0.0f }, { 1.5f, 0.4f, 1.5f }, kSandstone);
+        add(relic, "Plinth", &m_cube, { 0.0f, 1.25f, 0.0f }, { 1.0f, 0.9f, 1.0f }, kDarkStone);
+
+        SceneNode* ankh = relic->createChild("Ankh");
+        ankh->position = { 0.0f, 1.7f, 0.0f };
+        add(ankh, "Stem", &m_cube, { 0.0f, 0.55f, 0.0f }, { 0.22f, 1.1f, 0.15f }, relicGold);
+        add(ankh, "Arms", &m_cube, { 0.0f, 0.95f, 0.0f }, { 0.95f, 0.2f, 0.15f }, relicGold);
+        add(ankh, "Loop", &m_torus, { 0.0f, 1.45f, 0.0f }, { 0.75f, 0.9f, 0.75f }, relicGold)
+            ->rotation = { 90.0f, 0.0f, 0.0f };
+        m_relicSpinners.push_back(ankh);
+
+        gardenRelics.push_back(at + glm::vec3(0.0f, 2.6f, 0.0f));
+        gardenObstacles.push_back({ at.x, at.z, 1.05f });
+    }
+    // A crystal orb on a column, to the left. It breathes light.
+    {
+        const glm::vec3 at(-5.0f, 0.0f, front + 5.5f);
+        SceneNode* relic = garden->createChild("RelicOrb");
+        relic->position = at;
+        add(relic, "Column", &m_cylinder, { 0.0f, 1.0f, 0.0f }, { 0.7f, 2.0f, 0.7f }, kSandstone);
+        add(relic, "Cap", &m_cube, { 0.0f, 2.08f, 0.0f }, { 0.95f, 0.16f, 0.95f }, kDarkStone);
+        m_relicOrb = add(relic, "Orb", &m_sphere, { 0.0f, 2.55f, 0.0f }, { 0.75f, 0.75f, 0.75f }, crystal);
+
+        gardenRelics.push_back(at + glm::vec3(0.0f, 2.5f, 0.0f));
+        gardenObstacles.push_back({ at.x, at.z, 0.55f });
+    }
+    // A gold-capped obelisk, to the right.
+    {
+        const glm::vec3 at(5.0f, 0.0f, front + 5.5f);
+        SceneNode* relic = garden->createChild("RelicObelisk");
+        relic->position = at;
+        add(relic, "Base", &m_cube, { 0.0f, 0.15f, 0.0f }, { 1.15f, 0.3f, 1.15f }, kSandstone);
+        add(relic, "Shaft", &m_cube, { 0.0f, 1.9f, 0.0f }, { 0.6f, 3.2f, 0.6f }, kDarkStone);
+        add(relic, "Pyramidion", &m_cone, { 0.0f, 3.8f, 0.0f }, { 0.62f, 0.6f, 0.62f }, relicGold);
+        add(relic, "Band", &m_torus, { 0.0f, 3.2f, 0.0f }, { 0.75f, 0.4f, 0.75f }, kGold);
+
+        gardenRelics.push_back(at + glm::vec3(0.0f, 2.4f, 0.0f));
+        gardenObstacles.push_back({ at.x, at.z, 0.65f });
+    }
+
+    // --- a pool behind the ankh, with lotus flowers -----------------------------------
+    {
+        const glm::vec3 at(0.0f, 0.0f, front + 12.0f);
+        add(garden, "PoolRim", &m_thinTorus, at + glm::vec3(0.0f, 0.08f, 0.0f),
+            { 3.8f, 3.0f, 3.8f }, kStone);
+        add(garden, "Water", &m_cylinder, at + glm::vec3(0.0f, 0.04f, 0.0f),
+            { 3.6f, 0.06f, 3.6f }, water);
+
+        Material lotus = kFlesh;
+        lotus.kd = { 0.95f, 0.55f, 0.7f };  lotus.emissive = { 0.12f, 0.05f, 0.08f };
+        for (int i = 0; i < 3; ++i)
+        {
+            const float a = glm::radians(120.0f * static_cast<float>(i) + 20.0f);
+            const glm::vec3 p = at + glm::vec3(std::cos(a) * 0.9f, 0.1f, std::sin(a) * 0.9f);
+            add(garden, "LotusPad", &m_cylinder, p, { 0.55f, 0.02f, 0.55f }, leaf);
+            add(garden, "Lotus", &m_cone, p + glm::vec3(0.0f, 0.12f, 0.0f), { 0.3f, 0.22f, 0.3f }, lotus);
+        }
+        gardenObstacles.push_back({ at.x, at.z, 1.95f });
+    }
+
+    // --- palm trees in the corners ------------------------------------------------------
+    const glm::vec2 palms[4] = { { -7.0f, front + 1.8f }, { 7.0f, front + 1.8f },
+                                 { -7.0f, back - 2.0f },  { 7.0f, back - 2.0f } };
+    for (int t = 0; t < 4; ++t)
+    {
+        SceneNode* palm = garden->createChild("Palm");
+        palm->position = { palms[t].x, 0.0f, palms[t].y };
+        palm->rotation = { 0.0f, random(0.0f, 360.0f), 0.0f };
+
+        // A trunk of four segments, each leaning a little more: a gentle curve.
+        glm::vec3 top(0.0f);
+        for (int s = 0; s < 4; ++s)
+        {
+            const float lean = 4.0f + 4.0f * static_cast<float>(s);
+            SceneNode* seg = add(palm, "Trunk", &m_cylinder,
+                                 top + glm::vec3(0.0f, 0.6f, 0.0f),
+                                 { 0.34f - 0.04f * s, 1.2f, 0.34f - 0.04f * s }, trunk);
+            seg->rotation = { 0.0f, 0.0f, -lean };
+            top += glm::vec3(std::sin(glm::radians(lean)) * 1.2f, std::cos(glm::radians(lean)) * 1.15f, 0.0f);
+        }
+
+        // The crown: seven drooping fronds round the top.
+        for (int f = 0; f < 7; ++f)
+        {
+            const float yaw = 360.0f * static_cast<float>(f) / 7.0f;
+            const float droop = glm::radians(105.0f);
+            const glm::vec3 out(-std::sin(droop), std::cos(droop), 0.0f);    // Rz(droop) on +Y
+            const float cy = std::cos(glm::radians(yaw)), sy = std::sin(glm::radians(yaw));
+            const glm::vec3 dir(out.x * cy, out.y, -out.x * sy);              // then Ry(yaw)
+            SceneNode* frond = add(palm, "Frond", &m_cone, top + dir * 1.1f,
+                                   { 0.45f, 2.3f, 0.12f }, leaf);
+            frond->rotation = { 0.0f, yaw, 105.0f };
+        }
+        for (int c = 0; c < 3; ++c)
+        {
+            const float a = glm::radians(120.0f * static_cast<float>(c));
+            add(palm, "Coconut", &m_sphere,
+                top + glm::vec3(std::cos(a) * 0.22f, -0.25f, std::sin(a) * 0.22f),
+                { 0.22f, 0.22f, 0.22f }, trunk);
+        }
+        gardenObstacles.push_back({ palms[t].x, palms[t].y, 0.45f });
+    }
+
+    // --- bushes along the walls, and flowers everywhere -------------------------------
+    for (int i = 0; i < 10; ++i)
+    {
+        const float side = (i % 2 == 0) ? -1.0f : 1.0f;
+        const glm::vec3 at(side * random(7.4f, 8.2f), 0.0f, front + 3.8f + 1.1f * static_cast<float>(i));
+        for (int b = 0; b < 3; ++b)
+        {
+            const float r = random(0.7f, 1.1f);
+            add(garden, "Bush", &m_sphere,
+                at + glm::vec3(random(-0.4f, 0.4f), r * 0.4f, random(-0.4f, 0.4f)),
+                { r, r * 0.85f, r }, (b == 0) ? darkLeaf : leaf);
+        }
+    }
+
+    const glm::vec3 petals[3] = { { 0.92f, 0.22f, 0.28f }, { 0.95f, 0.80f, 0.20f }, { 0.95f, 0.95f, 0.90f } };
+    for (int i = 0; i < 36; ++i)
+    {
+        glm::vec3 at(random(-half + 1.0f, half - 1.0f), 0.0f, random(front + 1.0f, back - 1.0f));
+
+        // Not on the path, the relics or in the pool.
+        if (std::fabs(at.x) < 1.2f && at.z < front + 8.8f) { continue; }
+        bool clear = true;
+        for (const PropObstacle& o : gardenObstacles)
+        {
+            if (glm::length(glm::vec2(at.x - o.x, at.z - o.z)) < o.radius + 0.4f) { clear = false; }
+        }
+        if (!clear) { continue; }
+
+        Material petal = kFlesh;
+        petal.kd = petals[i % 3];
+        petal.emissive = petals[i % 3] * 0.08f;
+        add(garden, "Stem", &m_cylinder, at + glm::vec3(0.0f, 0.25f, 0.0f), { 0.04f, 0.5f, 0.04f }, leaf);
+        add(garden, "Flower", &m_sphere, at + glm::vec3(0.0f, 0.55f, 0.0f), { 0.2f, 0.14f, 0.2f }, petal);
+    }
+
+    // --- the night sky: a moon and stars ---------------------------------------------
+    Material moon = sky;
+    moon.emissive = { 0.85f, 0.88f, 0.95f };
+    add(garden, "Moon", &m_sphere, { -16.0f, 32.0f, back + 26.0f }, { 4.0f, 4.0f, 4.0f }, moon);
+
+    Material star = sky;
+    for (int i = 0; i < 60; ++i)
+    {
+        star.emissive = glm::vec3(random(0.6f, 1.0f));
+        const float size = random(0.10f, 0.22f);
+        add(garden, "Star", &m_sphere,
+            { random(-30.0f, 30.0f), random(16.0f, 34.0f), random(front - 5.0f, back + 35.0f) },
+            { size, size, size }, star);
+    }
+}
+
+void Scene::buildCharm()
+{
+    // A gold band set with a glowing gem, hung from a small bail. Built at
+    // full size around its own origin; the scene scales the whole charm as
+    // it flies, so the parts never need touching.
+    charm = m_root->createChild("Charm");
+    charm->visible = false;
+
+    Material gem;
+    gem.ka = { 0.05f, 0.12f, 0.14f };
+    gem.kd = { 0.20f, 0.60f, 0.70f };
+    gem.ks = { 0.9f, 1.0f, 1.0f };
+    gem.shininess = 96.0f;
+    gem.emissive  = { 0.35f, 0.95f, 1.0f };
+
+    SceneNode* band = add(charm, "Band", &m_torus,
+                          { 0.0f, 0.0f, 0.0f }, { 0.55f, 0.55f, 0.55f }, kGold);
+    band->rotation = { 90.0f, 0.0f, 0.0f };      // stands upright, like a medallion
+
+    charmGem = add(charm, "Gem", &m_sphere,
+                   { 0.0f, 0.0f, 0.0f }, { 0.24f, 0.24f, 0.24f }, gem);
+
+    add(charm, "Bail", &m_torus,
+        { 0.0f, 0.38f, 0.0f }, { 0.16f, 0.16f, 0.16f }, kGold);
+}
+
+glm::vec3 Scene::charmWorldPosition() const
+{
+    return (charm != nullptr) ? charm->position : glm::vec3(0.0f);
 }
 
 void Scene::buildCeilingWork()

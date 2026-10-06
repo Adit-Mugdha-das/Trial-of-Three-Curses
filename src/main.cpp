@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
+#include <cstdlib>
+#include <string>
+#include <vector>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -12,8 +15,11 @@
 #include "Debris.h"
 #include "Gaze.h"
 #include "Collapse.h"
+#include "Fireflies.h"
+#include "GatePuzzle.h"
 #include "Hud.h"
 #include "EscapeTuning.h"
+#include "Easing.h"
 #include "ParticleSystem.h"
 #include "Player.h"
 #include "Pursuer.h"
@@ -56,6 +62,44 @@ namespace
     // swings straight through a wall without this.
     // Pillars the camera must not end up inside: x, z, radius.
     struct CameraBlocker { float x, z, radius; };
+
+    // Once the gate is down the camera may follow him into the garden.
+    bool gGardenOpen = false;
+
+#ifdef TRIAL_AUTOPLAY
+    // Diagnostic: the frame as the GPU drew it, saved as a BMP. Independent of
+    // the desktop's screen capture, which can stop seeing an OpenGL window.
+    void saveFrameBmp(const std::string& path, int w, int h)
+    {
+        std::vector<unsigned char> pixels(static_cast<std::size_t>(w) * h * 3);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadBuffer(GL_BACK);
+        glReadPixels(0, 0, w, h, GL_BGR, GL_UNSIGNED_BYTE, pixels.data());
+
+        const int row = (w * 3 + 3) & ~3;
+        const unsigned dataSize = static_cast<unsigned>(row * h);
+        const unsigned fileSize = 54u + dataSize;
+        unsigned char header[54] = { 'B', 'M' };
+        auto put32 = [&header](int at, unsigned v)
+        {
+            for (int i = 0; i < 4; ++i) { header[at + i] = static_cast<unsigned char>(v >> (8 * i)); }
+        };
+        put32(2, fileSize);  put32(10, 54u);  put32(14, 40u);
+        put32(18, static_cast<unsigned>(w));  put32(22, static_cast<unsigned>(h));
+        header[26] = 1;  header[28] = 24;  put32(34, dataSize);
+
+        FILE* f = std::fopen(path.c_str(), "wb");
+        if (f == nullptr) { return; }
+        std::fwrite(header, 1, 54, f);
+        const unsigned char pad[3] = { 0, 0, 0 };
+        for (int y = 0; y < h; ++y)     // GL rows are bottom-up, as BMP's are
+        {
+            std::fwrite(&pixels[static_cast<std::size_t>(y) * w * 3], 1, static_cast<std::size_t>(w) * 3, f);
+            std::fwrite(pad, 1, static_cast<std::size_t>(row - w * 3), f);
+        }
+        std::fclose(f);
+    }
+#endif
     std::vector<CameraBlocker> gCameraBlockers;
 
     bool cameraPositionIsInside(const glm::vec3& p, const glm::vec3& subject,
@@ -122,7 +166,16 @@ namespace
 
         // The corridor is enclosed, so the ceiling matters here.
         // The cross-beams hang down to 6.4.
-        return std::fabs(p.x) <= 3.9f && p.y <= 6.2f && p.z <= 73.0f;
+        // The garden is open to the sky: only its walls constrain it.
+        if (gGardenOpen && p.z > Tuning::kGardenFrontZ + 0.4f)
+        {
+            return std::fabs(p.x) <= Tuning::kGardenHalfWidth - 0.3f && p.y <= 16.0f
+                && p.z <= Tuning::kGardenBackZ - 0.4f;
+        }
+
+        // ...and the constellation gate closes the far end - until it opens.
+        return std::fabs(p.x) <= 3.9f && p.y <= 6.2f
+            && p.z <= (gGardenOpen ? Tuning::kGardenFrontZ + 0.4f : Tuning::kGateSlabZ - 0.6f);
     }
 
     // Pulls an orbit camera in along its own view ray until it is back
@@ -326,6 +379,30 @@ int main()
     Scene scene;
     scene.build();
 
+    // The constellation gate's puzzle, and the fireflies that give its answer.
+    // They hover just in front of the rings.
+    GatePuzzle puzzle;
+    puzzle.setLayout({ scene.gateCentre.x, scene.gateCentre.y, Tuning::kGateSlabZ - 1.2f },
+                     scene.gateBand, scene.gateSocketRadius);
+    puzzle.reset(1u, scene.gateCentre);
+    bool puzzleActive = false;      // from the sanctuary until the next run
+    bool patternShownOnce = false;
+    bool ringUpHeld = false, ringDownHeld = false, ringLeftHeld = false, ringRightHeld = false;
+
+    // The garden: what is solid there, and the fireflies round each relic.
+    Fireflies gardenFlies[3];
+    for (int i = 0; i < 3 && i < static_cast<int>(scene.gardenRelics.size()); ++i)
+    {
+        const glm::vec3 r = scene.gardenRelics[i];
+        gardenFlies[i].init(22, r + glm::vec3(-1.8f, -1.6f, -1.8f), r + glm::vec3(1.8f, 1.2f, 1.8f),
+                            101u + static_cast<unsigned>(i));
+    }
+    float gardenOpenLevel = 0.0f;
+
+    // Fireflies in the chamber: below the cornice, inside the walls.
+    Fireflies fireflies;
+    fireflies.init(60, { -11.5f, 0.8f, -8.5f }, { 11.5f, 5.2f, 10.0f });
+
     TrialController trial;
 
     Player player;
@@ -354,6 +431,12 @@ int main()
                   << ") radius " << prop.radius << std::endl;
     }
 
+    // The garden's pedestals, pool and palms. Only he ever walks there.
+    for (const Scene::PropObstacle& o : scene.gardenObstacles)
+    {
+        player.addObstacle(o.x, o.z, o.radius);
+    }
+
     // The ceiling sections that can fall. Where each one will lie is known
     // up front, so its floor circles are registered now, switched off, and
     // switched on the moment it lands - for Medusa as much as for him.
@@ -375,6 +458,11 @@ int main()
         }
     }
     std::cout << "[Collapse] " << collapse.count() << " ceiling sections ready" << std::endl;
+
+    // The constellation gate closes the corridor's far end.
+    const float gateFaceZ = Tuning::kGateSlabZ - 0.3f;
+    player.setEndWall(gateFaceZ);
+    world.endZ = gateFaceZ;
 
     // Where she rests between runs, captured before anything moves her.
     const glm::vec3 medusaHome =
@@ -446,6 +534,11 @@ int main()
     // moment he is caught, so the shader does not snap back to flesh and
     // climb all over again.
     float petrifyHold = 0.0f;
+
+    // The sanctuary: how far raised, and the flare where Medusa hits it.
+    float sanctuaryLevel = 0.0f;
+    float sanctuaryFlash = 0.0f;
+    bool  medusaAtDome   = false;
 
     // Decaying camera shake, driven by impacts.
     float cameraShake = 0.0f;
@@ -552,6 +645,11 @@ int main()
               << "  3          debug: get caught\n"
               << "  R          abandon the trial and reset\n"
               << "  I          switch between trial and manual inspection\n"
+              << "\nThe constellation gate (at the end of the corridor)\n"
+              << "  The charm raises a sanctuary; it lasts 35 seconds.\n"
+              << "  Watch the fireflies form a pattern on the gate: one star per ring.\n"
+              << "  Up/Down choose a ring, Left/Right turn it, Space shows the pattern again.\n"
+              << "  Point every ring's gold arrow at its star to open the gate.\n"
               << "\nMedusa's gaze (during the escape)\n"
               << "  Green caps flash either side of the top bar = she is about to look.\n"
               << "  Her beam sweeps the whole corridor: running or strafing will NOT save\n"
@@ -671,16 +769,25 @@ int main()
         // WASD and the arrows are read once into forward/strafe, then given
         // to whichever owns them: the camera while free-flying, otherwise the
         // traveller. Only one consumer, so they can never fight.
+        // At the gate the arrows turn the rings instead, and only WASD walks.
+        const bool arrowsWalk = (trial.state() != TrialState::Sanctuary);
+        auto key = [window](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+
         float inputForward = 0.0f;
         float inputStrafe  = 0.0f;
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS ||
-            glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)    { inputForward += 1.0f; }
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS ||
-            glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)  { inputForward -= 1.0f; }
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS ||
-            glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) { inputStrafe  += 1.0f; }
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS ||
-            glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)  { inputStrafe  -= 1.0f; }
+        if (key(GLFW_KEY_W) || (arrowsWalk && key(GLFW_KEY_UP)))    { inputForward += 1.0f; }
+        if (key(GLFW_KEY_S) || (arrowsWalk && key(GLFW_KEY_DOWN)))  { inputForward -= 1.0f; }
+        if (key(GLFW_KEY_D) || (arrowsWalk && key(GLFW_KEY_RIGHT))) { inputStrafe  += 1.0f; }
+        if (key(GLFW_KEY_A) || (arrowsWalk && key(GLFW_KEY_LEFT)))  { inputStrafe  -= 1.0f; }
+
+        // --- the gate's rings -----------------------------------------------------
+        if (trial.state() == TrialState::Sanctuary)
+        {
+            if (pressed(window, GLFW_KEY_UP,    ringUpHeld))    { puzzle.select(-1); }
+            if (pressed(window, GLFW_KEY_DOWN,  ringDownHeld))  { puzzle.select(+1); }
+            if (pressed(window, GLFW_KEY_RIGHT, ringRightHeld)) { puzzle.rotate(+1); }
+            if (pressed(window, GLFW_KEY_LEFT,  ringLeftHeld))  { puzzle.rotate(-1); }
+        }
 
         // Ownership follows the VIEW mode, not the camera mode: first person
         // also runs the camera in FreeFly, but there WASD must still walk.
@@ -753,7 +860,7 @@ int main()
             while (particlesAvailable && debris.popImpact(impact))
             {
                 particles.burst(impact + glm::vec3(0.0f, 0.2f, 0.0f),
-                                55, glm::vec3(0.62f, 0.55f, 0.45f), 2.6f);
+                                30, glm::vec3(0.62f, 0.55f, 0.45f), 2.6f);
             }
 
             cameraShake = std::max(cameraShake, debris.shake());
@@ -793,7 +900,7 @@ int main()
                                           std::max(event.extent.x, event.extent.z));
                         if (particlesAvailable)
                         {
-                            particles.sprinkle(event.at, event.extent, 30, dust);
+                            particles.sprinkle(event.at, event.extent, 12, dust);
                         }
                         break;
 
@@ -814,7 +921,7 @@ int main()
                                 const glm::vec3 along = alongX
                                     ? glm::vec3(event.extent.x * f, 0.0f, 0.0f)
                                     : glm::vec3(0.0f, 0.0f, event.extent.z * f);
-                                particles.burst(event.at + along, 40, dust, 3.4f);
+                                particles.burst(event.at + along, 20, dust, 3.4f);
                             }
                         }
 
@@ -845,7 +952,96 @@ int main()
 
         // --- the chase ---------------------------------------------------------
         pursuer.setGateOpen(scene.gateLevel() > 0.85f);
-        pursuer.update(player.position(), deltaTime);
+        // When the gate opens she turns from its light and slithers away.
+        pursuer.update(trial.state() == TrialState::Garden ? glm::vec3(0.0f, 0.0f, 14.0f)
+                                                            : player.position(),
+                       deltaTime);
+
+        // --- the sanctuary holds her back -------------------------------------
+        // The dome grows from nothing, so as it rises it shoves her back
+        // with it rather than her appearing on the far side of it.
+        sanctuaryLevel = 0.0f;
+        if (trial.state() == TrialState::Sanctuary)
+        {
+            sanctuaryLevel = Easing::smoothstep01(trial.stateTime() / Tuning::kSanctuaryRise);
+
+            const glm::vec3 centre(0.0f, 0.0f, Tuning::kSanctuaryCentreZ);
+            const bool touching = pursuer.holdOutside(
+                centre, Tuning::kSanctuaryRadius * sanctuaryLevel);
+
+            // A flare the moment she hits it, and a steady glow while she leans on it.
+            if (touching && !medusaAtDome) { sanctuaryFlash = 1.0f; }
+            if (touching) { sanctuaryFlash = std::max(sanctuaryFlash, 0.45f); }
+            medusaAtDome = touching;
+        }
+        else
+        {
+            medusaAtDome = false;
+        }
+        sanctuaryFlash = std::max(0.0f, sanctuaryFlash - deltaTime * 2.5f);
+
+        // Solved: the dome is no longer needed and fades.
+        if (trial.state() == TrialState::Garden && puzzleActive)
+        {
+            sanctuaryLevel = 1.0f - Easing::smoothstep01(trial.stateTime() / 1.2f);
+        }
+
+        // --- the gate opening -------------------------------------------------------
+        if (trial.state() == TrialState::Garden)
+        {
+            const float before = gardenOpenLevel;
+            gardenOpenLevel = Easing::clamp01((trial.stateTime() - Tuning::kGateOpenDelay)
+                                              / Tuning::kGateOpenTime);
+
+            // A rumble while it goes down.
+            if (gardenOpenLevel > 0.0f && gardenOpenLevel < 1.0f)
+            {
+                cameraShake = std::max(cameraShake, 0.35f);
+            }
+            if (before <= 0.0f && gardenOpenLevel > 0.0f)
+            {
+                std::cout << "[Gate] it sinks into the floor" << std::endl;
+                if (particlesAvailable)
+                {
+                    for (float x = -3.5f; x <= 3.5f; x += 1.75f)
+                    {
+                        particles.burst({ x, 0.3f, Tuning::kGateSlabZ - 0.5f }, 25,
+                                        glm::vec3(0.55f, 0.48f, 0.38f), 2.5f);
+                    }
+                }
+            }
+
+            // Down far enough to step over: the way into the garden is open.
+            if (before < 0.85f && gardenOpenLevel >= 0.85f)
+            {
+                player.setEndWall(1.0e9f);
+                player.setGardenOpen(true);
+                gGardenOpen = true;
+                std::cout << "[Garden] the way is open" << std::endl;
+            }
+        }
+
+
+        // --- the constellation gate's puzzle -----------------------------------
+        if (puzzleActive)
+        {
+            // The fireflies show the pattern once on their own, as soon as the
+            // camera has turned to the gate.
+            if (trial.state() == TrialState::Sanctuary && !patternShownOnce
+                && trial.stateTime() >= 4.6f && puzzle.requestPattern())
+            {
+                patternShownOnce = true;
+                std::cout << "[Gate] the fireflies form the pattern - remember it" << std::endl;
+            }
+
+            puzzle.update(deltaTime, now);
+
+            if (trial.state() == TrialState::Sanctuary && puzzle.solved())
+            {
+                std::cout << "[Gate] the rings lock into place" << std::endl;
+                trial.gateSolved();
+            }
+        }
 
         if (scene.medusaRoot != nullptr)
         {
@@ -854,7 +1050,9 @@ int main()
 
         if (trial.state() == TrialState::Escape && pursuer.hasCaught(player.position()))
         {
+#ifndef TRIAL_AUTOPLAY_IMMORTAL     // diagnostic: let the bot reach the gate every run
             trial.caught();
+#endif
         }
 
         // --- Medusa's gaze -----------------------------------------------------
@@ -877,7 +1075,11 @@ int main()
                 gaze.update(eye, player.position(), deltaTime);
                 player.setExposureSlow(gaze.exposure());
 
+#ifdef TRIAL_AUTOPLAY_IMMORTAL
+                if (false)
+#else
                 if (gaze.caught())
+#endif
                 {
                     std::cout << "[Gaze] full exposure - the stone takes hold"
                               << std::endl;
@@ -949,6 +1151,13 @@ int main()
         }
 
         // --- did he get out? ---------------------------------------------------
+        // Close to the gate, the charm raises the sanctuary.
+        if (trial.state() == TrialState::Escape
+            && player.position().z >= Tuning::kSanctuaryTriggerZ)
+        {
+            trial.reachedSanctuary();
+        }
+
         if (trial.state() == TrialState::Escape
             && player.position().z >= Tuning::kExitZ)
         {
@@ -993,8 +1202,60 @@ int main()
 
                 std::cout << "[Medusa] gives chase" << std::endl;
             }
-            else if (from == TrialState::Escape)
+            else if (from == TrialState::Escape && to == TrialState::Sanctuary)
             {
+                // She keeps coming - the dome is what stops her now. The
+                // stones stop, and her gaze cannot cross it.
+                gaze.reset();
+                debris.setActive(false);
+                std::cout << "[Sanctuary] " << Tuning::kSanctuaryDuration
+                          << " seconds before the charm is spent" << std::endl;
+                std::cout << "[Gate] Up/Down choose a ring, Left/Right turn it, "
+                             "Space asks the fireflies again" << std::endl;
+
+                // A fresh pattern every run; the swarm streams out of the charm.
+                puzzle.reset(static_cast<unsigned>(now * 1000.0f), scene.charmWorldPosition());
+                puzzleActive = true;
+                patternShownOnce = false;
+                if (particlesAvailable)
+                {
+                    particles.burst(scene.charmWorldPosition(), 90,
+                                    glm::vec3(0.35f, 0.9f, 1.0f), 4.0f);
+                }
+            }
+            else if (from == TrialState::Sanctuary && to == TrialState::Garden)
+            {
+                // She does not catch him now - she retreats from the light.
+                gaze.reset();
+                debris.setActive(false);
+                if (particlesAvailable)
+                {
+                    // The constellation flares as the rings lock.
+                    for (int k = 0; k < GatePuzzle::kRings; ++k)
+                    {
+                        particles.burst(puzzle.notchPosition(k, puzzle.target(k)), 30,
+                                        glm::vec3(0.45f, 1.0f, 1.0f), 2.5f);
+                    }
+                }
+            }
+            else if (from == TrialState::Escape || from == TrialState::Sanctuary)
+            {
+                if (from == TrialState::Sanctuary && to == TrialState::Caught)
+                {
+                    std::cout << "[Sanctuary] the charm is spent; the dome falls" << std::endl;
+                    if (particlesAvailable)
+                    {
+                        // The dome breaking up into motes.
+                        for (int k = 0; k < 5; ++k)
+                        {
+                            const float a = glm::radians(72.0f * static_cast<float>(k));
+                            particles.burst({ std::sin(a) * 2.5f, 2.5f,
+                                              Tuning::kSanctuaryCentreZ + std::cos(a) * 2.5f },
+                                            30, glm::vec3(0.35f, 0.9f, 1.0f), 3.0f);
+                        }
+                    }
+                }
+
                 pursuer.setActive(false);
                 gaze.reset();
 
@@ -1035,6 +1296,13 @@ int main()
                 // Every block back in place, every torch relit.
                 collapse.reset();
                 clearCollapse();
+                puzzleActive = false;
+
+                // The gate closes again behind the garden.
+                gardenOpenLevel = 0.0f;
+                gGardenOpen = false;
+                player.setGardenOpen(false);
+                player.setEndWall(gateFaceZ);
                 std::cout << "[Trial] a new traveller enters the chamber" << std::endl;
             }
         }
@@ -1161,6 +1429,52 @@ int main()
                 }
             }
 
+            if (trial.state() == TrialState::Sanctuary
+                && puzzle.show() != GatePuzzle::Show::Idle && puzzle.patternShows() > 0)
+            {
+                // Watch the pattern, then press one key every 0.4 s: choose
+                // the first wrong ring, turn it the short way round.
+                static float autoPress = 0.0f;
+                autoPress += deltaTime;
+                if (autoPress >= 0.4f && puzzle.show() == GatePuzzle::Show::Holding)
+                {
+                    autoPress = 0.0f;
+                    for (int k = 0; k < GatePuzzle::kRings; ++k)
+                    {
+                        if (puzzle.ringMatches(k)) { continue; }
+                        if (puzzle.selected() != k)
+                        {
+                            puzzle.select(k > puzzle.selected() ? 1 : -1);
+                            printf("[auto] select ring %d\n", puzzle.selected());
+                        }
+                        else
+                        {
+                            const int turn = GatePuzzle::shortestTurn(puzzle.step(k), puzzle.target(k));
+                            puzzle.rotate(turn > 0 ? 1 : -1);
+                            printf("[auto] turn ring %d %s\n", k, turn > 0 ? "right" : "left");
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (trial.state() == TrialState::Garden && gGardenOpen)
+            {
+                // Into the garden, up the stepping stones to the ankh.
+                const glm::vec3 d = glm::vec3(0.0f, 0.0f, Tuning::kGardenFrontZ + 5.6f)
+                                  - player.position();
+                walkDirection = (glm::length(glm::vec3(d.x, 0.0f, d.z)) > 0.4f)
+                              ? glm::vec3(d.x, 0.0f, d.z) : glm::vec3(0.0f);
+            }
+
+            if (trial.state() == TrialState::Sanctuary)
+            {
+                const glm::vec3 d = glm::vec3(0.0f, 0.0f, Tuning::kSanctuaryCentreZ + 1.0f)
+                                  - player.position();
+                walkDirection = (glm::length(glm::vec3(d.x, 0.0f, d.z)) > 0.4f)
+                              ? glm::vec3(d.x, 0.0f, d.z) : glm::vec3(0.0f);
+            }
+
             autoReport += deltaTime;
             if (autoReport >= 1.0f)
             {
@@ -1201,6 +1515,13 @@ int main()
         // Always updated, even with no input, so he decelerates rather than
         // stopping dead the instant control is taken away.
         player.update(walkDirection, deltaTime);
+
+        // Once it is up, the dome keeps him in as well as her out.
+        if (trial.state() == TrialState::Sanctuary && sanctuaryLevel >= 1.0f)
+        {
+            player.keepWithin({ 0.0f, 0.0f, Tuning::kSanctuaryCentreZ },
+                              Tuning::kSanctuaryRadius - Tuning::kPlayerRadius - 0.1f);
+        }
 
         if (scene.traveller != nullptr)
         {
@@ -1253,7 +1574,21 @@ int main()
 
         if (!inspectMode)
         {
-            if (pressed(window, GLFW_KEY_SPACE, beginHeld))      { trial.begin(); }
+            if (pressed(window, GLFW_KEY_SPACE, beginHeld))
+            {
+                // At the gate, Space asks the fireflies to show the pattern again.
+                if (trial.state() == TrialState::Sanctuary)
+                {
+                    if (puzzle.requestPattern())
+                    {
+                        std::cout << "[Gate] the fireflies show the pattern again" << std::endl;
+                    }
+                }
+                else
+                {
+                    trial.begin();
+                }
+            }
             if (pressed(window, GLFW_KEY_R,     trialResetHeld)) { trial.reset(); }
             if (pressed(window, GLFW_KEY_1,     forceGoodHeld))  { trial.forceOutcome(true); }
             if (pressed(window, GLFW_KEY_2,     forceBadHeld))   { trial.forceOutcome(false); }
@@ -1336,6 +1671,7 @@ int main()
         gDirector.setFollowTarget(player.position());
         gDirector.setFollowSpeed(player.speedFraction());
         gDirector.setDanger(chaseDanger);
+        gDirector.setStateTime(trial.stateTime());
 
         // Look up at the chamber breaking - but only while he is still in it.
         gDirector.setLookUp((trial.state() == TrialState::Escape
@@ -1395,6 +1731,43 @@ int main()
 
         scene.applyCollapse(collapse, now);
 
+        scene.sanctuaryLevel = sanctuaryLevel;
+        for (int k = 0; k < GatePuzzle::kRings; ++k)
+        {
+            scene.gateRingAngle[k] = puzzleActive ? puzzle.ringAngle(k) : 0.0f;
+        }
+        scene.gateSelected = (trial.state() == TrialState::Sanctuary) ? puzzle.selected() : -1;
+        scene.gateLock     = puzzleActive ? puzzle.lockLevel() : 0.0f;
+        scene.gardenOpen   = gardenOpenLevel;
+
+        // The gate shot starts 4.5 s in (see CameraDirector); from then he
+        // is a ghost, in cinematic view only.
+        scene.travellerGhost = (trial.state() == TrialState::Sanctuary
+                                && trial.stateTime() > 4.3f
+                                && gViewMode == ViewMode::Cinematic) ? 1.0f : 0.0f;
+        scene.sanctuaryFlash = sanctuaryFlash;
+        scene.sanctuaryWarning = (trial.state() == TrialState::Sanctuary)
+            ? Easing::clamp01((trial.stateTime()
+                               - (Tuning::kSanctuaryDuration - Tuning::kSanctuaryWarning))
+                              / Tuning::kSanctuaryWarning)
+            : 0.0f;
+
+        // --- the Djinn's charm arrives ------------------------------------------
+        {
+            static bool hadCharm = false;
+            const bool hasCharm = trial.hasCharm();
+            if (hasCharm && !hadCharm)
+            {
+                std::cout << "[Charm] the Djinn grants a protective charm" << std::endl;
+                if (particlesAvailable)
+                {
+                    particles.burst(scene.charmWorldPosition(), 40,
+                                    glm::vec3(0.35f, 0.9f, 1.0f), 2.2f);
+                }
+            }
+            hadCharm = hasCharm;
+        }
+
         // --- hand the gaze to the scene ------------------------------------------
         {
             const bool escaping = (trial.state() == TrialState::Escape);
@@ -1430,6 +1803,65 @@ int main()
                                  useParticles ? scene.columnLevel() : 0.0f);
 #endif
             particles.update(deltaTime, now);
+
+            // --- fireflies ------------------------------------------------------
+            // They scatter from the traveller, and panic when the chamber
+            // starts to come down.
+            fireflies.update(deltaTime, player.position(), collapse.tremor());
+            for (int i = 0; i < fireflies.count(); ++i)
+            {
+                const float glow = fireflies.glow(i);
+                const glm::vec3 at = fireflies.position(i);
+
+                // A tight bright core and a wide soft halo round it.
+                // Sized to read from the overview camera fifteen units away,
+                // not just up close.
+                particles.addGlow(at, 0.14f + 0.08f * glow,
+                                  { 1.0f, 1.0f, 0.6f, 0.25f + 0.75f * glow });
+                particles.addGlow(at, 1.0f,
+                                  { 0.55f, 0.95f, 0.20f, 0.65f * glow });
+            }
+
+            if (puzzleActive)
+            {
+                for (int i = 0; i < GatePuzzle::kFlies; ++i)
+                {
+                    const float glow = puzzle.flyGlow(i);
+                    const glm::vec3 at = puzzle.flyPosition(i);
+                    // Bigger than the chamber's: they are read against a
+                    // brightly lit gate from eight units away.
+                    const float star = (i < 9) ? 1.35f : 1.0f;
+                    // They drift off into the garden as the gate goes down.
+                    const float fade = 1.0f - gardenOpenLevel;
+                    particles.addGlow(at, (0.16f + 0.10f * glow) * star,
+                                      { 1.0f, 1.0f, 0.75f, (0.35f + 0.65f * glow) * fade });
+                    particles.addGlow(at, 1.1f * star,
+                                      { 0.6f, 1.0f, 0.3f, 0.65f * glow * fade });
+                }
+            }
+
+            // The garden's fireflies, gathered round the relics.
+            if (gardenOpenLevel > 0.01f)
+            {
+                for (Fireflies& swarm : gardenFlies)
+                {
+                    swarm.update(deltaTime, player.position(), 0.0f);
+                    for (int i = 0; i < swarm.count(); ++i)
+                    {
+                        const float glow = swarm.glow(i) * gardenOpenLevel;
+                        const glm::vec3 at = swarm.position(i);
+                        particles.addGlow(at, 0.12f + 0.07f * glow,
+                                          { 1.0f, 1.0f, 0.6f, 0.2f + 0.8f * glow });
+                        particles.addGlow(at, 0.8f, { 0.55f, 0.95f, 0.2f, 0.5f * glow });
+                    }
+                }
+            }
+
+            // In the garden the light that wanders is a firefly by the ankh.
+            const Fireflies& lighting = (gardenOpenLevel > 0.5f) ? gardenFlies[0] : fireflies;
+            const int lit = lighting.lit();
+            scene.fireflyLightLevel    = lighting.lightLevel();
+            scene.fireflyLightPosition = (lit >= 0) ? lighting.position(lit) : glm::vec3(0.0f);
 
 #ifdef TRIAL_DEBUG_PARTICLES
             {
@@ -1586,6 +2018,10 @@ int main()
             info.wouldBalance = trial.wouldBalance();
             info.time         = now;
             info.escapeActive = (trial.state() == TrialState::Escape);
+            info.charm        = trial.charm();
+            info.sanctuaryActive = (trial.state() == TrialState::Sanctuary);
+            info.sanctuaryLeft   = 1.0f - Easing::clamp01(trial.stateTime()
+                                                         / Tuning::kSanctuaryDuration);
 
             if (info.escapeActive)
             {
@@ -1593,7 +2029,7 @@ int main()
                 // the bar starts empty the moment the chase does.
                 const float from = 0.8f;
                 info.exitProgress = glm::clamp(
-                    (player.position().z - from) / (Tuning::kExitZ - from),
+                    (player.position().z - from) / (Tuning::kSanctuaryTriggerZ - from),
                     0.0f, 1.0f);
 
                 info.danger      = chaseDanger;
@@ -1604,6 +2040,40 @@ int main()
 
             hud.draw(info, gWindowWidth, gWindowHeight);
         }
+
+#ifdef TRIAL_AUTOPLAY
+        // Set TRIAL_SHOT_DIR to have the self-playing build save frames at
+        // fixed moments of the first run.
+        if (const char* shotDir = std::getenv("TRIAL_SHOT_DIR"))
+        {
+            struct Moment { TrialState state; float at; const char* name; };
+            static const Moment moments[] = {
+                { TrialState::Placing,   0.5f, "a_chamber" },
+                { TrialState::Sanctuary, 7.0f, "b_puzzle" },
+                { TrialState::Garden,    0.3f, "c_open0" },
+                { TrialState::Garden,    1.3f, "c_open1" },
+                { TrialState::Garden,    2.1f, "c_open2" },
+                { TrialState::Garden,    2.9f, "c_open3" },
+                { TrialState::Garden,    3.5f, "c_open4" },
+                { TrialState::Garden,    6.0f, "d_walk0" },
+                { TrialState::Garden,    9.0f, "d_walk1" },
+                { TrialState::Garden,   14.0f, "d_walk2" },
+                { TrialState::Garden,   23.0f, "e_wide" },
+            };
+            static bool taken[sizeof(moments) / sizeof(moments[0])] = {};
+            for (std::size_t i = 0; i < sizeof(moments) / sizeof(moments[0]); ++i)
+            {
+                if (!taken[i] && trial.state() == moments[i].state
+                    && trial.stateTime() >= moments[i].at)
+                {
+                    taken[i] = true;
+                    saveFrameBmp(std::string(shotDir) + "/" + moments[i].name + ".bmp",
+                                 gWindowWidth, gWindowHeight);
+                    printf("[shot] %s\n", moments[i].name);
+                }
+            }
+        }
+#endif
 
         glfwSwapBuffers(window);
         glfwPollEvents();

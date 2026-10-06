@@ -73,11 +73,12 @@ std::vector<Collapse::Spec> Collapse::standardLayout()
     // even. The blast of dust from the beam at 30.5 puts out torch 1 across
     // the way; the beam at 44.5 lands right beside torch 2 and smashes it;
     // the last only makes torch 3 gutter.
+    // Two, not three: with a third the corridor was too busy to read
+    // Medusa's gaze in.
     struct Beam { const char* name; float z; float side; int torch; bool snuffs; };
-    const Beam beams[3] = {
+    const Beam beams[2] = {
         { "beam at 30.5, left half", 30.5f, -1.0f, Collapse::kChamberTorches + 1, true  },
         { "beam at 44.5, left half", 44.5f, -1.0f, Collapse::kChamberTorches + 2, true  },
-        { "beam at 58.5, left half", 58.5f, -1.0f, Collapse::kChamberTorches + 3, false },
     };
 
     for (const Beam& beam : beams)
@@ -312,7 +313,7 @@ void Collapse::update(float deltaTime, const glm::vec3& player)
                     e.section = i;
                     e.at = underside;
                     e.extent = spread;
-                    e.count = 16;
+                    e.count = 8;
                     m_events.push_back(e);
                 }
                 break;
@@ -333,7 +334,7 @@ void Collapse::update(float deltaTime, const glm::vec3& player)
                     e.section = i;
                     e.at = underside;
                     e.extent = spread;
-                    e.count = shaking ? 8 : 5;
+                    e.count = shaking ? 4 : 2;
                     m_events.push_back(e);
                 }
 
@@ -361,7 +362,7 @@ void Collapse::update(float deltaTime, const glm::vec3& player)
                         e.section = i;
                         e.at = underside;
                         e.extent = spread;
-                        e.count = 3;
+                        e.count = 1;
                         m_events.push_back(e);
                     }
                 }

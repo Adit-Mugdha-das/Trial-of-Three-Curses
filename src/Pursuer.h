@@ -31,6 +31,10 @@ public:
     }
 
     void setActive(bool active) { m_active = active; }
+
+    // Keeps her outside a circle - the sanctuary. True while she is pressed
+    // against it.
+    bool holdOutside(const glm::vec3& centre, float radius);
     bool active() const { return m_active; }
 
     void update(const glm::vec3& target, float deltaTime);

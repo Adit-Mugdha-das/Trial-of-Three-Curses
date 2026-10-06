@@ -26,7 +26,9 @@ bool ParticleSystem::init(int maxParticles)
 
     m_maxParticles = maxParticles;
     m_particles.assign(static_cast<std::size_t>(maxParticles), Particle{});
-    m_instanceData.resize(static_cast<std::size_t>(maxParticles) * kFloatsPerInstance);
+    // Room for the glows on the end of the same buffer.
+    m_instanceData.resize(static_cast<std::size_t>(maxParticles + kMaxGlows)
+                          * kFloatsPerInstance);
 
     // Unit quad centred on the origin, expanded to face the camera in the
     // vertex shader.
@@ -204,8 +206,32 @@ void ParticleSystem::sprinkle(const glm::vec3& origin, const glm::vec3& halfExte
     }
 }
 
+void ParticleSystem::addGlow(const glm::vec3& position, float size, const glm::vec4& color)
+{
+    if (m_glowCount >= kMaxGlows || m_maxParticles == 0)
+    {
+        return;
+    }
+
+    // Straight after the live particles, which update() packs at the front.
+    const std::size_t index = static_cast<std::size_t>(m_aliveCount + m_glowCount);
+    float* out = &m_instanceData[index * kFloatsPerInstance];
+    out[0] = position.x;
+    out[1] = position.y;
+    out[2] = position.z;
+    out[3] = size;
+    out[4] = color.r;
+    out[5] = color.g;
+    out[6] = color.b;
+    out[7] = color.a;
+
+    ++m_glowCount;
+}
+
 void ParticleSystem::update(float deltaTime, float /*time*/)
 {
+    m_glowCount = 0;
+
     if (m_maxParticles == 0)
     {
         return;
@@ -286,7 +312,8 @@ void ParticleSystem::update(float deltaTime, float /*time*/)
 
 void ParticleSystem::render(const glm::mat4& view, const glm::mat4& projection)
 {
-    if (m_aliveCount <= 0 || m_vao == 0)
+    const int total = m_aliveCount + m_glowCount;
+    if (total <= 0 || m_vao == 0)
     {
         return;
     }
@@ -305,7 +332,7 @@ void ParticleSystem::render(const glm::mat4& view, const glm::mat4& projection)
                  static_cast<GLsizeiptr>(m_instanceData.size() * sizeof(float)),
                  nullptr, GL_STREAM_DRAW);
     glBufferSubData(GL_ARRAY_BUFFER, 0,
-                    static_cast<GLsizeiptr>(m_aliveCount * kFloatsPerInstance * sizeof(float)),
+                    static_cast<GLsizeiptr>(total * kFloatsPerInstance * sizeof(float)),
                     m_instanceData.data());
 
     m_shader.use();
@@ -328,7 +355,7 @@ void ParticleSystem::render(const glm::mat4& view, const glm::mat4& projection)
     glDisable(GL_CULL_FACE);
 
     glBindVertexArray(m_vao);
-    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, m_aliveCount);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, total);
     glBindVertexArray(0);
 
     if (wasCulling == GL_TRUE)

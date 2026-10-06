@@ -70,6 +70,50 @@ public:
     // Where a torch's flame is, for the puff of smoke when it goes out.
     glm::vec3 torchFlamePosition(int torch) const;
 
+    // --- the constellation gate and the sanctuary -----------------------------
+    // Three concentric stone rings on the gate, each turning about its centre.
+    // Index 0 is the outer ring.
+    std::vector<SceneNode*> gateRings;
+
+    // Where the rings are, for the puzzle: their centre on the gate's face,
+    // the radius of each ring's band (0 = outer), and the sockets' circle.
+    glm::vec3 gateCentre{ 0.0f };
+    float     gateBand[3] = { 0.0f, 0.0f, 0.0f };
+    float     gateSocketRadius = 0.0f;
+
+    // Set by main from the puzzle each frame.
+    float gateRingAngle[3] = { 0.0f, 0.0f, 0.0f };   // degrees about Z
+    int   gateSelected = -1;                         // -1: none highlighted
+    float gateLock = 0.0f;                           // 0..1 as they lock
+
+    // 0..1: he fades to a ghost while the camera looks past him at the gate,
+    // so he never hides a ring's star.
+    float travellerGhost = 0.0f;
+
+    // --- the hidden garden ----------------------------------------------------
+    // 0 shut, 1 the gate fully sunk into the floor.
+    float gardenOpen = 0.0f;
+
+    // The three relics (for the fireflies that gather round them) and what
+    // in the garden is solid.
+    std::vector<glm::vec3>    gardenRelics;
+    std::vector<PropObstacle> gardenObstacles;
+    SceneNode* sanctuaryDome = nullptr;
+
+    float sanctuaryLevel   = 0.0f;   // 0 none, 1 fully raised
+    float sanctuaryFlash   = 0.0f;   // brightens where she presses against it
+    float sanctuaryWarning = 0.0f;   // 0..1 over its last seconds: it flickers
+
+    // --- the Djinn's charm ----------------------------------------------------
+    SceneNode* charm    = nullptr;   // flies from the column, then circles him
+    SceneNode* charmGem = nullptr;
+    float charmLevel() const { return m_charmFlight; }
+    glm::vec3 charmWorldPosition() const;
+
+    // One firefly mid-flash casts a small real light. Level 0 = none.
+    glm::vec3 fireflyLightPosition{ 0.0f };
+    float     fireflyLightLevel = 0.0f;
+
     // --- Medusa's gaze ------------------------------------------------------
     // The beam itself: a translucent cone from between her eyes. A child of
     // her head, so it turns wherever the head turns.
@@ -229,6 +273,7 @@ private:
     Mesh m_cylinder;
     Mesh m_cone;
     Mesh m_torus;
+    Mesh m_thinTorus;    // fine rims on the gate's rings
     Mesh m_plane;
 
     // Texture library. Generated procedurally in buildTextures(); swap any
@@ -296,6 +341,24 @@ private:
     float m_headYaw   = 0.0f;
     float m_headPitch = 0.0f;
 
+    // The charm: how far along its flight (1 = with him), how big (it shrinks
+    // away on Reset), how bright (it dims if he is caught), and its two spins.
+    float m_charmFlight = 0.0f;
+    float m_charmScale  = 0.0f;
+    float m_charmPower  = 1.0f;
+    float m_charmOrbit  = 0.0f;
+    float m_charmSpin   = 0.0f;
+    float m_ghost       = 0.0f;
+
+    SceneNode* m_gateRoot = nullptr;           // sinks into the floor to open
+    std::vector<SceneNode*> m_relicSpinners;   // relics that turn slowly
+    SceneNode* m_relicOrb = nullptr;           // pulses
+
+    // The rune stones ringing the dome on the floor, and where each sits
+    // relative to its centre when fully raised.
+    std::vector<SceneNode*> m_runes;
+    std::vector<glm::vec3>  m_runeOffsets;
+
     void buildTextures();
     void buildChamber();
     void buildScale();
@@ -305,6 +368,10 @@ private:
     void buildTreasure();
     void buildCorridor();
     void buildAnubisStatue();
+    void buildCharm();
+    void buildGate();
+    void buildSanctuary();
+    void buildGarden();
 
     void updateLights(float time);
 };

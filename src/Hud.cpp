@@ -4,6 +4,8 @@
 
 #include <iostream>
 
+#include "EscapeTuning.h"
+
 bool Hud::init()
 {
     if (!m_shader.load("shaders/hud.vert", "shaders/hud.frag"))
@@ -51,6 +53,8 @@ glm::vec3 Hud::colorFor(TrialState state)
         case TrialState::Cursed:   return { 0.45f, 0.88f, 0.36f };  // Medusa
         case TrialState::TreasureRevealed: return { 1.00f, 0.80f, 0.30f };  // the prize
         case TrialState::Escape:   return { 0.95f, 0.45f, 0.20f };  // alarm
+        case TrialState::Sanctuary: return { 0.35f, 0.90f, 1.00f }; // the charm's light
+        case TrialState::Garden:   return { 0.45f, 0.95f, 0.55f };  // living green
         case TrialState::Escaped:  return { 0.55f, 0.95f, 0.65f };  // relief
         case TrialState::Caught:   return { 0.60f, 0.62f, 0.66f };  // stone
         case TrialState::Reset:    return { 0.42f, 0.40f, 0.46f };
@@ -113,12 +117,21 @@ void Hud::draw(const Info& info, int windowWidth, int windowHeight)
                         || (state == TrialState::TreasureRevealed)
                         || (state == TrialState::Escape);
 
-    const float fill = info.escapeActive ? info.exitProgress
-                     : openEnded         ? 1.0f
-                                         : info.progress;
+    const float fill = info.sanctuaryActive ? info.sanctuaryLeft
+                     : info.escapeActive    ? info.exitProgress
+                     : openEnded            ? 1.0f
+                                            : info.progress;
+
+    // In its last seconds the sanctuary's bar blinks, as the dome does.
+    float barAlpha = 0.95f;
+    const float warnAt = Tuning::kSanctuaryWarning / Tuning::kSanctuaryDuration;
+    if (info.sanctuaryActive && info.sanctuaryLeft < warnAt)
+    {
+        barAlpha = 0.45f + 0.5f * (0.5f + 0.5f * std::sin(info.time * 18.0f));
+    }
 
     rect({ -1.0f + margin, bottom }, { barWidth * fill, barHeight },
-         { accent.r, accent.g, accent.b, 0.95f });
+         { accent.r, accent.g, accent.b, barAlpha });
 
     // A tick at the far end, so the goal is a place rather than a feeling.
     if (info.escapeActive)
@@ -137,6 +150,24 @@ void Hud::draw(const Info& info, int windowWidth, int windowHeight)
     rect({ trackLeft, trackBottom }, { trackWidth, trackHeight },
          { 0.10f, 0.09f, 0.13f, 0.85f });
 
+    // --- the charm ------------------------------------------------------------
+    // A gold square with a cyan gem in it, left of the track, once the Djinn
+    // has given it. It grows in as the charm flies to him.
+    if (info.charm > 0.01f)
+    {
+        const float size = 18.0f * info.charm;
+        const float gem  = 10.0f * info.charm;
+        const float cx = trackLeft - 30.0f * pixelX;
+        const float cy = trackBottom + trackHeight * 0.5f;
+        const float pulse = 0.8f + 0.2f * std::sin(info.time * 5.0f);
+
+        rect({ cx - size * 0.5f * pixelX, cy - size * 0.5f * pixelY },
+             { size * pixelX, size * pixelY }, { 0.95f, 0.75f, 0.25f, 0.95f });
+        rect({ cx - gem * 0.5f * pixelX, cy - gem * 0.5f * pixelY },
+             { gem * pixelX, gem * pixelY },
+             { 0.35f * pulse, 0.95f * pulse, 1.0f * pulse, 1.0f });
+    }
+
     if (info.escapeActive)
     {
         // How close she is. Pulsing at the top end, because by then a number
@@ -153,7 +184,7 @@ void Hud::draw(const Info& info, int windowWidth, int windowHeight)
         rect({ trackLeft, trackBottom },
              { trackWidth * info.danger, trackHeight }, dangerColor);
     }
-    else
+    else if (!info.sanctuaryActive)
     {
         // The lit band in the middle is the tolerance window; the marker is
         // the heart's current weight.

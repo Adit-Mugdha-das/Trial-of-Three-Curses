@@ -25,6 +25,17 @@ struct WorldShape
     // The doorway is solid stone until the slab is raised.
     bool gateOpen = false;
 
+    // A wall right across the corridor's far end: the constellation gate.
+    float endZ = 1.0e9f;
+
+    // The walled garden beyond it, once the gate is open: wider than the
+    // corridor, entered through the corridor's end, with a front wall either
+    // side of that opening.
+    bool  gardenOpen      = false;
+    float gardenFrontZ    = 74.0f;   // centre of its front wall
+    float gardenBackZ     = 90.0f;
+    float gardenHalfWidth = 9.0f;
+
     // Standing props - the scale, the lamp - as circles on the floor. A fixed
     // array rather than a vector so the whole struct stays trivially
     // copyable and allocation-free; both the player and Medusa hold one.

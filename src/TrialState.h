@@ -29,6 +29,8 @@ enum class TrialState
     Cursed,           // curse: the guardian stirs
     TreasureRevealed, // the treasure rises; the player takes control
     Escape,           // the chamber collapses and Medusa gives chase
+    Sanctuary,        // at the gate: the charm's dome holds her back, for a while
+    Garden,           // the rings aligned: the gate opens onto a hidden garden
     Escaped,          // out alive
     Caught,           // petrified
     Reset             // everything eases back to rest
@@ -52,6 +54,8 @@ public:
     // state it belongs to, so a stray call cannot derail the machine.
     void treasureCollected();   // TreasureRevealed -> Escape
     void reachedExit();         // Escape -> Escaped
+    void reachedSanctuary();    // Escape -> Sanctuary (needs the charm)
+    void gateSolved();          // Sanctuary -> Garden: the rings are aligned
     void caught();              // Escape -> Caught
 
     // Is the traveller under player control right now?
@@ -62,6 +66,12 @@ public:
 
     // True once the verdict has been passed and the treasure has appeared.
     bool trialIsOver() const;
+
+    // The Djinn's protective charm, 0..1. Rises from the energy column late in
+    // Balanced and reaches the traveller at 1; he keeps it for the rest of the
+    // run. Only a true heart ever earns one.
+    float charm() const;
+    bool  hasCharm() const { return charm() >= 1.0f; }
 
     // --- query ---
     TrialState state() const { return m_state; }

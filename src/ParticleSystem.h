@@ -37,6 +37,12 @@ public:
     void sprinkle(const glm::vec3& origin, const glm::vec3& halfExtent,
                   int count, const glm::vec3& tint);
 
+    // A glowing point that is not a simulated particle - a firefly, say.
+    // Drawn in the same instanced batch for this frame only. Call after
+    // update(), which clears them.
+    void addGlow(const glm::vec3& position, float size, const glm::vec4& color);
+    static constexpr int kMaxGlows = 256;   // the chamber's fireflies and the gate's
+
     // Needs the camera basis to orient the billboards. Extract it from the
     // view matrix rather than the camera object: the view matrix is the
     // authority on what "right" and "up" mean on screen.
@@ -78,6 +84,7 @@ private:
 
     int m_maxParticles = 0;
     int m_aliveCount   = 0;
+    int m_glowCount    = 0;
 
     glm::vec3 m_emitterPosition{ 0.0f };
     float m_emitterStrength = 0.0f;
