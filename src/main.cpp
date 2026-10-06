@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <iostream>
 #include <cstdlib>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,7 @@
 #include "Collapse.h"
 #include "Fireflies.h"
 #include "GatePuzzle.h"
+#include "DjinnForm.h"
 #include "Hud.h"
 #include "EscapeTuning.h"
 #include "Easing.h"
@@ -388,6 +390,7 @@ int main()
     bool puzzleActive = false;      // from the sanctuary until the next run
     bool patternShownOnce = false;
     bool ringUpHeld = false, ringDownHeld = false, ringLeftHeld = false, ringRightHeld = false;
+    bool autoSolveHeld = false;
 
     // The garden: what is solid there, and the fireflies round each relic.
     Fireflies gardenFlies[3];
@@ -398,6 +401,15 @@ int main()
                             101u + static_cast<unsigned>(i));
     }
     float gardenOpenLevel = 0.0f;
+
+    // The offering: seconds since he laid the jewel on the altar; < 0 not yet.
+    float offerTime = -1.0f;
+    glm::vec3 offerFrom(0.0f);
+    std::mt19937 sparkleRng(2718u);
+
+    // The Djinn, made of smoke, who rises when the lamp opens.
+    DjinnForm djinn;
+    djinn.init();
 
     // Fireflies in the chamber: below the cornice, inside the walls.
     Fireflies fireflies;
@@ -650,6 +662,7 @@ int main()
               << "  Watch the fireflies form a pattern on the gate: one star per ring.\n"
               << "  Up/Down choose a ring, Left/Right turn it, Space shows the pattern again.\n"
               << "  Point every ring's gold arrow at its star to open the gate.\n"
+              << "  Enter solves it for you, so you can watch the rings turn.\n"
               << "\nMedusa's gaze (during the escape)\n"
               << "  Green caps flash either side of the top bar = she is about to look.\n"
               << "  Her beam sweeps the whole corridor: running or strafing will NOT save\n"
@@ -787,6 +800,13 @@ int main()
             if (pressed(window, GLFW_KEY_DOWN,  ringDownHeld))  { puzzle.select(+1); }
             if (pressed(window, GLFW_KEY_RIGHT, ringRightHeld)) { puzzle.rotate(+1); }
             if (pressed(window, GLFW_KEY_LEFT,  ringLeftHeld))  { puzzle.rotate(-1); }
+
+            // Enter: solve it for me, slowly enough to watch.
+            if (pressed(window, GLFW_KEY_ENTER, autoSolveHeld) && !puzzle.autoSolving())
+            {
+                puzzle.startAutoSolve();
+                std::cout << "[Gate] solving the rings for you - watch them turn" << std::endl;
+            }
         }
 
         // Ownership follows the VIEW mode, not the camera mode: first person
@@ -1011,6 +1031,20 @@ int main()
                 }
             }
 
+            // --- the offering, and the wave of life ---------------------------
+            if (gGardenOpen && offerTime < 0.0f)
+            {
+                const glm::vec3 a = scene.gardenAltar;
+                const float dx = player.position().x - a.x;
+                const float dz = player.position().z - a.z;
+                if (dx * dx + dz * dz < Tuning::kOfferReach * Tuning::kOfferReach)
+                {
+                    offerTime = 0.0f;
+                    offerFrom = player.position() + glm::vec3(0.0f, 2.0f, 0.0f);
+                    std::cout << "[Garden] he lays the treasure on the altar" << std::endl;
+                }
+            }
+
             // Down far enough to step over: the way into the garden is open.
             if (before < 0.85f && gardenOpenLevel >= 0.85f)
             {
@@ -1211,7 +1245,7 @@ int main()
                 std::cout << "[Sanctuary] " << Tuning::kSanctuaryDuration
                           << " seconds before the charm is spent" << std::endl;
                 std::cout << "[Gate] Up/Down choose a ring, Left/Right turn it, "
-                             "Space asks the fireflies again" << std::endl;
+                             "Space asks the fireflies again, Enter solves it" << std::endl;
 
                 // A fresh pattern every run; the swarm streams out of the charm.
                 puzzle.reset(static_cast<unsigned>(now * 1000.0f), scene.charmWorldPosition());
@@ -1298,8 +1332,9 @@ int main()
                 clearCollapse();
                 puzzleActive = false;
 
-                // The gate closes again behind the garden.
+                // The gate closes again behind the garden, and it dies again.
                 gardenOpenLevel = 0.0f;
+                offerTime = -1.0f;
                 gGardenOpen = false;
                 player.setGardenOpen(false);
                 player.setEndWall(gateFaceZ);
@@ -1332,8 +1367,9 @@ int main()
                 trial.forceOutcome(true);
             }
 
-            if (trial.state() == TrialState::TreasureRevealed)
+            if (trial.state() == TrialState::TreasureRevealed && trial.stateTime() > 3.6f)
             {
+                // After watching the Djinn point at it.
                 const glm::vec3 d = scene.treasureWorldPosition() - player.position();
                 walkDirection = glm::vec3(d.x, 0.0f, d.z);
             }
@@ -1740,6 +1776,67 @@ int main()
         scene.gateLock     = puzzleActive ? puzzle.lockLevel() : 0.0f;
         scene.gardenOpen   = gardenOpenLevel;
 
+        // The jewel's flight, then the circle of life spreading from the altar.
+        if (offerTime >= 0.0f)
+        {
+            const float before = offerTime - Tuning::kOfferFlight;
+            offerTime += deltaTime;
+            const float waveT = offerTime - Tuning::kOfferFlight;
+
+            scene.offeringFlight = Easing::clamp01(offerTime / Tuning::kOfferFlight);
+            scene.offeringFrom   = offerFrom;
+
+            if (waveT >= 0.0f)
+            {
+                if (before < 0.0f)
+                {
+                    std::cout << "[Garden] life returns to the garden" << std::endl;
+                    cameraShake = std::max(cameraShake, 0.3f);
+                    if (particlesAvailable)
+                    {
+                        particles.burst(scene.offeringPosition(), 120,
+                                        glm::vec3(1.0f, 0.85f, 0.45f), 4.0f);
+                    }
+                }
+
+                // Fast at first, slowing as it reaches the walls.
+                const float u = Easing::clamp01(waveT / Tuning::kWaveTime);
+                scene.gardenWaveRadius = 0.05f + Tuning::kWaveRadius * (1.0f - (1.0f - u) * (1.0f - u));
+
+                // Gold sparks thrown up all along the edge as it travels.
+                if (particlesAvailable && u < 1.0f)
+                {
+                    std::uniform_real_distribution<float> angle(0.0f, 6.2831853f);
+                    for (int k = 0; k < 6; ++k)
+                    {
+                        const float a = angle(sparkleRng);
+                        const glm::vec3 p = scene.gardenWaveCentre
+                            + glm::vec3(std::cos(a), 0.0f, std::sin(a)) * scene.gardenWaveRadius;
+                        if (std::fabs(p.x) < Tuning::kGardenHalfWidth - 0.4f
+                            && p.z > Tuning::kGardenFrontZ + 0.5f && p.z < Tuning::kGardenBackZ - 0.4f)
+                        {
+                            particles.burst(p + glm::vec3(0.0f, 0.1f, 0.0f), 2,
+                                            glm::vec3(1.0f, 0.82f, 0.42f), 1.4f);
+                        }
+                    }
+                }
+            }
+
+            // The ending has played out: a new traveller.
+            if (waveT > Tuning::kWaveTime + Tuning::kGardenLinger
+                && trial.state() == TrialState::Garden)
+            {
+                trial.reset();
+            }
+        }
+        else
+        {
+            scene.offeringFlight   = -1.0f;
+            scene.gardenWaveRadius = -1.0f;
+        }
+        scene.gardenWaveCentre = scene.gardenAltar;
+        gDirector.setOfferTime(offerTime);
+
         // The gate shot starts 4.5 s in (see CameraDirector); from then he
         // is a ghost, in cinematic view only.
         scene.travellerGhost = (trial.state() == TrialState::Sanctuary
@@ -1800,9 +1897,58 @@ int main()
             particles.setEmitter(scene.djinnEmitterPosition(), 1.0f);
 #else
             particles.setEmitter(scene.djinnEmitterPosition(),
-                                 useParticles ? scene.columnLevel() : 0.0f);
+                                 useParticles ? scene.columnLevel()
+                                                * (1.0f - 0.75f * scene.djinnPresence)
+                                              : 0.0f);
 #endif
             particles.update(deltaTime, now);
+
+            // --- the Djinn ------------------------------------------------------
+            // Out of the lamp as it opens; he points at the treasure as it
+            // rises, then pours back into the lamp.
+            {
+                const TrialState st = trial.state();
+                const float t = trial.stateTime();
+                const bool present = (st == TrialState::Balanced && t >= 1.2f)
+                                  || (st == TrialState::TreasureRevealed && t < 3.4f);
+
+                if (st == TrialState::Waiting) { djinn.hideNow(); }
+                djinn.setBase(scene.djinnEmitterPosition());
+                if (present != djinn.shown())
+                {
+                    djinn.show(present);
+                    std::cout << (present ? "[Djinn] rises from the lamp in a column of smoke"
+                                          : "[Djinn] pours back into the lamp") << std::endl;
+                }
+
+                static bool pointed = false;
+                const float point = (st == TrialState::TreasureRevealed)
+                                  ? Easing::smoothstep01((t - 0.1f) / 0.6f) : 0.0f;
+                if (point > 0.0f && !pointed) { std::cout << "[Djinn] points to the treasure" << std::endl; }
+                pointed = point > 0.0f;
+
+                djinn.faceTowards(player.position(), deltaTime);
+                djinn.setPointing(scene.treasureWorldPosition() + glm::vec3(0.0f, 0.6f, 0.0f), point);
+                djinn.update(deltaTime, now);
+
+                if (djinn.visible())
+                {
+                    for (int i = 0; i < djinn.count(); ++i)
+                    {
+                        particles.addGlow(djinn.position(i), djinn.size(i), djinn.color(i));
+                    }
+                    // A warm halo round each eye.
+                    for (int e = 0; e < 2; ++e)
+                    {
+                        particles.addGlow(djinn.eyePosition(e), 0.6f,
+                                          { 1.0f, 0.82f, 0.4f, 0.95f * djinn.presence() });
+                    }
+                }
+
+                scene.djinnHand     = djinn.handPosition();
+                scene.djinnChest    = djinn.chestPosition();
+                scene.djinnPresence = djinn.presence();
+            }
 
             // --- fireflies ------------------------------------------------------
             // They scatter from the traveller, and panic when the chamber
@@ -1840,15 +1986,66 @@ int main()
                 }
             }
 
+            // --- the souls, rising --------------------------------------------
+            {
+                int freed = -1;
+                while (scene.popFreedStatue(freed))
+                {
+                    std::cout << "[Garden] a statue wakes - a soul is freed" << std::endl;
+                }
+
+                // Which statues have already burst into gold dust this run.
+                static bool burstDone[16] = {};
+                if (scene.gardenWaveRadius <= 0.0f)
+                {
+                    for (bool& done : burstDone) { done = false; }
+                }
+
+                static float trail = 0.0f;
+                trail += deltaTime;
+                const bool dropTrail = trail >= 0.08f;
+                if (dropTrail) { trail = 0.0f; }
+
+                for (int i = 0; i < scene.soulCount(); ++i)
+                {
+                    if (!scene.soulVisible(i)) { continue; }
+                    const float glow = scene.soulGlow(i);
+                    const glm::vec3 at = scene.soulPosition(i);
+
+                    // The moment the stone gives way: a cloud of gold dust.
+                    if (i < 16 && !burstDone[i])
+                    {
+                        burstDone[i] = true;
+                        const glm::vec3 chest = scene.statueChest(i);
+                        particles.burst(chest, 70, glm::vec3(1.0f, 0.82f, 0.42f), 2.6f);
+                        particles.burst(chest - glm::vec3(0.0f, 1.2f, 0.0f), 40,
+                                        glm::vec3(0.85f, 0.75f, 0.5f), 1.6f);
+                    }
+
+                    // A firefly - but a big one.
+                    // Sized for the sky shot, a dozen units away.
+                    particles.addGlow(at, 0.45f + 0.15f * glow, { 1.0f, 1.0f, 0.75f, glow });
+                    particles.addGlow(at, 2.6f, { 0.65f, 1.0f, 0.35f, 0.65f * glow });
+                    if (dropTrail)
+                    {
+                        particles.burst(at, 2, glm::vec3(1.0f, 0.9f, 0.5f), 0.5f);
+                    }
+                }
+            }
+
             // The garden's fireflies, gathered round the relics.
             if (gardenOpenLevel > 0.01f)
             {
-                for (Fireflies& swarm : gardenFlies)
+                for (int s = 0; s < 3; ++s)
                 {
+                    Fireflies& swarm = gardenFlies[s];
                     swarm.update(deltaTime, player.position(), 0.0f);
+
+                    // Barely there while the garden is dead.
+                    const float alive = 0.2f + 0.8f * scene.gardenLifeAt(scene.gardenRelics[s]);
                     for (int i = 0; i < swarm.count(); ++i)
                     {
-                        const float glow = swarm.glow(i) * gardenOpenLevel;
+                        const float glow = swarm.glow(i) * gardenOpenLevel * alive;
                         const glm::vec3 at = swarm.position(i);
                         particles.addGlow(at, 0.12f + 0.07f * glow,
                                           { 1.0f, 1.0f, 0.6f, 0.2f + 0.8f * glow });
@@ -2049,6 +2246,13 @@ int main()
             struct Moment { TrialState state; float at; const char* name; };
             static const Moment moments[] = {
                 { TrialState::Placing,   0.5f, "a_chamber" },
+                { TrialState::Balanced,  1.9f, "a_djinn1_rise" },
+                { TrialState::Balanced,  2.6f, "a_djinn2_rise" },
+                { TrialState::Balanced,  3.6f, "a_djinn3_formed" },
+                { TrialState::Balanced,  4.3f, "a_djinn4_charm" },
+                { TrialState::TreasureRevealed, 1.6f, "a_djinn5_point" },
+                { TrialState::TreasureRevealed, 3.0f, "a_djinn6_point" },
+                { TrialState::TreasureRevealed, 4.1f, "a_djinn7_gone" },
                 { TrialState::Sanctuary, 7.0f, "b_puzzle" },
                 { TrialState::Garden,    0.3f, "c_open0" },
                 { TrialState::Garden,    1.3f, "c_open1" },
@@ -2059,6 +2263,13 @@ int main()
                 { TrialState::Garden,    9.0f, "d_walk1" },
                 { TrialState::Garden,   14.0f, "d_walk2" },
                 { TrialState::Garden,   23.0f, "e_wide" },
+                { TrialState::Garden,    7.5f, "f_wave0" },
+                { TrialState::Garden,    9.0f, "f_wave1" },
+                { TrialState::Garden,   10.5f, "f_wave2" },
+                { TrialState::Garden,   12.0f, "f_wave3" },
+                { TrialState::Garden,   14.0f, "f_wave4" },
+                { TrialState::Garden,   17.5f, "f_wave5" },
+                { TrialState::Garden,   20.0f, "f_wave6" },
             };
             static bool taken[sizeof(moments) / sizeof(moments[0])] = {};
             for (std::size_t i = 0; i < sizeof(moments) / sizeof(moments[0]); ++i)

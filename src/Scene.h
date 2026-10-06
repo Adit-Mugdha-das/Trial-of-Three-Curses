@@ -98,11 +98,44 @@ public:
     // in the garden is solid.
     std::vector<glm::vec3>    gardenRelics;
     std::vector<PropObstacle> gardenObstacles;
+
+    // --- the garden of lost souls ----------------------------------------------
+    // The wave of life: a circle spreading from the altar. Radius <= 0: the
+    // garden is still dead. Main grows it; the shader and the plants read it.
+    glm::vec3 gardenWaveCentre{ 0.0f };
+    float     gardenWaveRadius = -1.0f;
+    glm::vec3 gardenAltar{ 0.0f };          // the ankh's pedestal
+
+    // 0..1: how alive the garden is at this spot right now.
+    float gardenLifeAt(const glm::vec3& where) const;
+
+    // The offering: the treasure's jewel floating from his hands into the
+    // ankh's loop. < 0 hidden, 0..1 in flight, 1 resting there.
+    float     offeringFlight = -1.0f;
+    glm::vec3 offeringFrom{ 0.0f };
+    glm::vec3 offeringPosition() const;
+
+    // --- the souls ---------------------------------------------------------------
+    // Each statue, once the wave reaches it, glows, crumbles and frees a soul
+    // that rises into the sky as a firefly. Main draws the souls as particles.
+    int       soulCount() const { return static_cast<int>(m_statues.size()); }
+    bool      soulVisible(int i) const;
+    glm::vec3 soulPosition(int i) const;
+    float     soulGlow(int i) const;          // 0..1
+    glm::vec3 statueChest(int i) const;
+    bool      popFreedStatue(int& index);     // one per statue as the wave reaches it
     SceneNode* sanctuaryDome = nullptr;
 
     float sanctuaryLevel   = 0.0f;   // 0 none, 1 fully raised
     float sanctuaryFlash   = 0.0f;   // brightens where she presses against it
     float sanctuaryWarning = 0.0f;   // 0..1 over its last seconds: it flickers
+
+    // --- the Djinn made of smoke (drawn by main as particles) -----------------
+    // Fed back here so the charm leaves from his hand and the lamp's light
+    // moves up into his chest.
+    glm::vec3 djinnHand{ 0.0f };
+    glm::vec3 djinnChest{ 0.0f };
+    float     djinnPresence = 0.0f;
 
     // --- the Djinn's charm ----------------------------------------------------
     SceneNode* charm    = nullptr;   // flies from the column, then circles him
@@ -352,6 +385,35 @@ private:
 
     SceneNode* m_gateRoot = nullptr;           // sinks into the floor to open
     std::vector<SceneNode*> m_relicSpinners;   // relics that turn slowly
+    float m_relicSpin = 0.0f;
+    SceneNode* m_offering = nullptr;   // the jewel laid on the altar
+    float m_offeringSpin = 0.0f;
+
+    // A garden node whose SHAPE changes with life: fronds hanging limp or
+    // spread, flowers closed or open. Its colour changes in the shader.
+    struct Living
+    {
+        SceneNode* node = nullptr;
+        glm::vec3  where{ 0.0f };            // where on the lawn it stands
+        glm::vec3  alivePosition{ 0.0f }, deadPosition{ 0.0f };
+        glm::vec3  aliveScale{ 1.0f },    deadScale{ 1.0f };
+        glm::vec3  aliveRotation{ 0.0f }, deadRotation{ 0.0f };
+    };
+    std::vector<Living> m_living;
+
+    // The stone travellers. Part 3 frees them.
+    struct Statue
+    {
+        SceneNode* root = nullptr;
+        SceneNode* body = nullptr;           // everything but the plinth
+        std::vector<SceneNode*> parts;       // the stone limbs, head and torso
+        glm::vec3  position{ 0.0f };
+        float      size = 1.0f;
+        float      freed = -1.0f;            // seconds since the wave reached it; < 0 not yet
+        float      phase = 0.0f;             // its soul's own spiral
+    };
+    std::vector<Statue> m_statues;
+    std::vector<int>    m_freedEvents;       // statues just reached, for main's bursts
     SceneNode* m_relicOrb = nullptr;           // pulses
 
     // The rune stones ringing the dome on the floor, and where each sits

@@ -46,6 +46,12 @@ CameraDirector::Shot CameraDirector::shotFor(TrialState state) const
             return { { 3.0f, 2.4f, 1.5f }, 11.0f, 55.0f, 20.0f };
 
         case TrialState::TreasureRevealed:
+            // First, while the Djinn points: him and the rising treasure in
+            // one frame, from the front of the chamber.
+            if (m_stateTime < 4.0f)
+            {
+                return { { -3.0f, 3.9f, 1.2f }, 9.5f, 70.0f, 8.0f };
+            }
             // Push in on the treasure, then keep the traveller in frame as
             // he walks to it.
             return { { m_follow.x * 0.35f, 2.4f, m_follow.z * 0.35f + 0.5f },
@@ -108,12 +114,23 @@ CameraDirector::Shot CameraDirector::shotFor(TrialState state) const
             {
                 return { { 0.0f, 3.3f, Tuning::kGateSlabZ - 0.7f }, 8.7f, 270.0f, 14.0f };
             }
-            // ...follow him in...
-            if (m_stateTime < 20.0f)
+            // ...follow him in until he makes the offering...
+            if (m_offerTime < 0.0f)
             {
                 return { m_follow + glm::vec3(0.0f, 1.6f, 2.0f), 7.5f, 270.0f, 18.0f };
             }
-            // ...and pull back high over the garden for the last of it.
+            // ...rise to look down on the altar as the wave of life spreads...
+            if (m_offerTime < Tuning::kOfferFlight + 4.2f)
+            {
+                return { { 0.0f, 1.0f, Tuning::kGardenFrontZ + 7.5f }, 9.0f, 270.0f, 45.0f };
+            }
+            // ...then low, looking up past the empty plinths at the souls
+            // rising into the stars...
+            if (m_offerTime < Tuning::kOfferFlight + 14.0f)
+            {
+                return { { 0.0f, 5.5f, Tuning::kGardenFrontZ + 9.0f }, 10.0f, 270.0f, -12.0f };
+            }
+            // ...and pull back over the garden come alive.
             return { { 0.0f, 1.5f, 82.0f }, 10.5f, 20.0f, 35.0f };
 
         case TrialState::Escaped:

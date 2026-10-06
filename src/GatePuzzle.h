@@ -43,6 +43,13 @@ public:
     void rotate(int delta);     // +1 clockwise as you face the gate
     bool requestPattern();      // false if the fireflies are busy
 
+    // Solve it for the player, slowly enough to watch: the fireflies hold the
+    // constellation, and the rings are chosen and turned one press at a time.
+    // Any manual select/rotate hands control back.
+    void startAutoSolve();
+    bool autoSolving() const { return m_autoSolve; }
+    static constexpr float kAutoStep = 0.45f;   // seconds between presses
+
     // --- state ---------------------------------------------------------------
     int   selected() const { return m_selected; }
     int   step(int ring) const { return m_step[ring]; }
@@ -85,6 +92,9 @@ private:
     float m_angle[kRings]  = { 0.0f, 0.0f, 0.0f };
     int   m_selected = 0;
     float m_lockTime = 0.0f;
+    bool  m_autoSolve = false;
+    float m_autoTimer = 0.0f;
+    void  autoStep();           // one press, as a player would make it
 
     Show  m_show = Show::Idle;
     float m_showTime = 0.0f;

@@ -41,7 +41,7 @@ struct WorldShape
     // copyable and allocation-free; both the player and Medusa hold one.
     // Fallen ceiling sections add their own circles, switched on only once
     // they are down - hence the room for more than the standing props need.
-    static constexpr int kMaxObstacles = 48;
+    static constexpr int kMaxObstacles = 64;
 
     struct Obstacle
     {

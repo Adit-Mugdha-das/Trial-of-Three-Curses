@@ -43,6 +43,13 @@ struct Material
     int   useNormalMap;
     vec2  uvScale;
     float opacity;
+
+    // The garden's plants: what they look like dead.
+    int   living;
+    vec3  deadKa;
+    vec3  deadKd;
+    vec3  deadKs;
+    vec3  deadEmissive;
 };
 
 in vec3 vWorldPos;
@@ -55,6 +62,10 @@ uniform Light uLights[MAX_LIGHTS];
 uniform int   uLightCount;
 
 uniform Material uMaterial;
+
+// The wave of life spreading from the garden's altar. Radius <= 0: not begun.
+uniform vec3  uLifeCentre;
+uniform float uLifeRadius;
 
 uniform vec3 uAmbient;     // global ambient, modulated by the material's ka
 uniform vec3 uViewPos;
@@ -216,6 +227,27 @@ void main()
     vec3 kd = uMaterial.kd;
     vec3 ks = uMaterial.ks;
     vec3 ka = uMaterial.ka;
+    vec3 lifeGlow = vec3(0.0);
+    float life = 1.0;
+
+    if (uMaterial.living == 1)
+    {
+        // Each pixel decides for itself whether the wave has reached it, so
+        // the colour spreads across one big lawn as a smooth circle.
+        life = 0.0;
+        if (uLifeRadius > 0.0)
+        {
+            float d = length(vWorldPos.xz - uLifeCentre.xz);
+            life = clamp((uLifeRadius - d) / 1.2, 0.0, 1.0);
+        }
+        ka = mix(uMaterial.deadKa, ka, life);
+        kd = mix(uMaterial.deadKd, kd, life);
+        ks = mix(uMaterial.deadKs, ks, life);
+
+        // The wave's leading edge glows gold as it passes.
+        float edge = life * (1.0 - life) * 4.0;
+        lifeGlow = vec3(1.0, 0.82, 0.40) * 1.1 * edge;
+    }
 
     if (uUseTextures == 1)
     {
@@ -237,6 +269,10 @@ void main()
 
     float shininess = uMaterial.shininess;
     vec3  emissive  = uMaterial.emissive;
+    if (uMaterial.living == 1)
+    {
+        emissive = mix(uMaterial.deadEmissive, emissive, life) + lifeGlow;
+    }
 
     if (uPetrifyEnabled == 1 && uPetrify > 0.0)
     {

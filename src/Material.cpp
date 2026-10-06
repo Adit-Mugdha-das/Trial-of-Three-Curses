@@ -13,6 +13,15 @@ void Material::upload(const Shader& shader) const
     shader.setVec2("uMaterial.uvScale", uvScale);
     shader.setFloat("uMaterial.opacity", opacity);
 
+    shader.setInt("uMaterial.living", living ? 1 : 0);
+    if (living)
+    {
+        shader.setVec3("uMaterial.deadKa", deadKa);
+        shader.setVec3("uMaterial.deadKd", deadKd);
+        shader.setVec3("uMaterial.deadKs", deadKs);
+        shader.setVec3("uMaterial.deadEmissive", deadEmissive);
+    }
+
     // Fixed texture units: 0 diffuse, 1 specular, 2 shadow map (bound once
     // per frame by main), 3 normal.
     shader.setInt("uMaterial.diffuseMap", 0);

@@ -49,6 +49,15 @@ struct Material
 
     bool isTransparent() const { return opacity < 0.999f; }
 
+    // A living material (the garden's plants) also has a dead look. The
+    // shader picks between them per pixel by distance from the wave of life:
+    // dead outside it, alive behind it, a gold glow along its edge.
+    bool      living = false;
+    glm::vec3 deadKa{ 0.0f };
+    glm::vec3 deadKd{ 0.0f };
+    glm::vec3 deadKs{ 0.0f };
+    glm::vec3 deadEmissive{ 0.0f };
+
     void upload(const Shader& shader) const;
 };
 

@@ -61,6 +61,8 @@ void GatePuzzle::reset(unsigned seed, const glm::vec3& releaseFrom)
     }
     m_selected = 0;
     m_lockTime = 0.0f;
+    m_autoSolve = false;
+    m_autoTimer = 0.0f;
 
     m_show = Show::Idle;
     m_showTime = 0.0f;
@@ -78,15 +80,43 @@ void GatePuzzle::reset(unsigned seed, const glm::vec3& releaseFrom)
 
 // --------------------------------------------------------------------- input --
 
+void GatePuzzle::startAutoSolve()
+{
+    if (solved()) { return; }
+    m_autoSolve = true;
+    m_autoTimer = 0.0f;
+}
+
+void GatePuzzle::autoStep()
+{
+    // The first ring that is wrong: go to it, then turn it the short way.
+    for (int k = 0; k < kRings; ++k)
+    {
+        if (ringMatches(k)) { continue; }
+        if (m_selected != k)
+        {
+            m_selected += (k > m_selected) ? 1 : -1;
+        }
+        else
+        {
+            m_step[k] += (shortestTurn(wrapStep(m_step[k]), m_target[k]) > 0) ? 1 : -1;
+        }
+        return;
+    }
+    m_autoSolve = false;   // every ring is right: the lock does the rest
+}
+
 void GatePuzzle::select(int delta)
 {
     if (solved()) { return; }
+    m_autoSolve = false;
     m_selected = std::clamp(m_selected + delta, 0, kRings - 1);
 }
 
 void GatePuzzle::rotate(int delta)
 {
     if (solved()) { return; }
+    m_autoSolve = false;
     m_step[m_selected] += delta;
 }
 
@@ -181,6 +211,17 @@ void GatePuzzle::update(float deltaTime, float time)
         if (std::fabs(goal - m_angle[k]) < 0.05f) { m_angle[k] = goal; }
     }
 
+    // --- solving it for the player, one press at a time -----------------------
+    if (m_autoSolve)
+    {
+        m_autoTimer += deltaTime;
+        if (m_autoTimer >= kAutoStep)
+        {
+            m_autoTimer = 0.0f;
+            autoStep();
+        }
+    }
+
     // --- the lock: all three on their marks, held a moment -------------------
     if (matched()) { m_lockTime += deltaTime; }
     else           { m_lockTime = 0.0f; }
@@ -202,7 +243,9 @@ void GatePuzzle::update(float deltaTime, float time)
 
     // Once it is solved they gather into the constellation for good - the
     // answer made real.
-    const float formed = solved() ? 1.0f : Easing::smoothstep01(showLevel());
+    // ...and while it is being solved for him, so he can see what each ring
+    // is being turned to.
+    const float formed = (solved() || m_autoSolve) ? 1.0f : Easing::smoothstep01(showLevel());
 
     // --- each firefly: a stiff spring to where it should be ------------------
     for (int i = 0; i < kFlies; ++i)

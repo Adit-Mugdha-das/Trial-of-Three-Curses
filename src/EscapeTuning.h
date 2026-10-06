@@ -47,7 +47,20 @@ namespace Tuning
     constexpr float kGardenHalfWidth = 9.0f;
     constexpr float kGateOpenDelay   = 0.6f;    // the rings glow a moment first
     constexpr float kGateOpenTime    = 2.6f;    // the gate sinking into the floor
-    constexpr float kGardenDuration  = 30.0f;   // then a new traveller (R sooner)
+    constexpr float kGardenDuration  = 30.0f;   // (no longer used: the garden waits for the offering)
+
+    // --- the offering and the wave of life -----------------------------------
+    constexpr float kOfferReach   = 2.3f;    // how close to the altar he must come
+    constexpr float kOfferFlight  = 1.3f;    // the jewel floating onto the ankh
+    constexpr float kWaveTime     = 6.5f;    // the circle of life crossing the garden
+    constexpr float kWaveRadius   = 15.0f;   // big enough to reach every corner
+    constexpr float kGardenLinger = 10.0f;   // the souls rising; then a new traveller (R sooner)
+
+    // --- the souls ---------------------------------------------------------------
+    constexpr float kSoulGlowTime    = 1.0f;   // a statue glowing gold from within
+    constexpr float kSoulCrumbleTime = 0.8f;   // and crumbling into light
+    constexpr float kSoulRiseSpeed   = 1.1f;   // then its soul rising, units/s
+    constexpr float kSoulSkyHeight   = 24.0f;  // where it fades into the stars
 
     // --- the collapse: ceiling sections breaking away ------------------------
     // Each one cracks (dust trickles out), shudders, tips about the edge it

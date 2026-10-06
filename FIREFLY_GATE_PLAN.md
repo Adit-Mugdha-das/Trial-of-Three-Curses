@@ -31,6 +31,7 @@ rotating stone rings add visible motion and transformations.
 | Left / Right | turn it one step (60 degrees) |
 | Space | ask the fireflies to show the pattern again (F was taken by the camera) |
 | WASD | still walk; the arrows stop walking while you are at the gate |
+| Enter | solve it for you: the stars stay up and the rings turn to match, one step at a time (an arrow key takes control back) |
 
 ## Part 2 - what was built
 

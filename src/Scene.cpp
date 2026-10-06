@@ -1135,8 +1135,10 @@ void Scene::update(float time, float deltaTime)
         // Rising out of the lamp mouth as it grows.
         energyColumn->position.y = 2.2f + 1.4f * m_column;
 
-        // Translucent so the lamp and the rings read through it.
-        energyColumn->material.opacity = 0.42f * m_column;
+        // Translucent so the lamp and the rings read through it - and almost
+        // gone while the Djinn stands over the lamp, or it hides his body.
+        const float columnShow = 1.0f - 0.9f * Easing::clamp01(djinnPresence);
+        energyColumn->material.opacity = 0.42f * m_column * columnShow;
 
         constexpr float kPi = 3.14159265358979323846f;
 
@@ -1165,7 +1167,7 @@ void Scene::update(float time, float deltaTime)
             // sin gives a fade in AND out, so rings neither pop into
             // existence at the lamp mouth nor vanish abruptly at the top.
             energyRings[i]->material.opacity =
-                m_column * std::sin(cycle * kPi) * 0.9f;
+                m_column * std::sin(cycle * kPi) * 0.9f * columnShow;
 
             // Cool as they expand and lose energy.
             energyRings[i]->material.emissive =
@@ -1415,9 +1417,84 @@ void Scene::update(float time, float deltaTime)
         m_gateRoot->position.y = -7.4f * Easing::smoothstep01(gardenOpen);
         m_gateRoot->visible = gardenOpen < 0.999f;
     }
+    // --- the statues: glow, crumble into light, free a soul -------------------
+    for (std::size_t i = 0; i < m_statues.size(); ++i)
+    {
+        Statue& s = m_statues[i];
+
+        // The garden died again (a new run): every statue whole and grey.
+        if (gardenWaveRadius <= 0.0f)
+        {
+            if (s.freed >= 0.0f)
+            {
+                s.freed = -1.0f;
+                s.body->visible = true;
+                for (SceneNode* part : s.parts)
+                {
+                    part->material.emissive = glm::vec3(0.0f);
+                    part->material.kd = kStone.kd;
+                    part->material.opacity = 1.0f;
+                }
+            }
+            continue;
+        }
+
+        if (s.freed < 0.0f)
+        {
+            if (gardenLifeAt(s.position) > 0.5f)
+            {
+                s.freed = 0.0f;
+                m_freedEvents.push_back(static_cast<int>(i));
+            }
+            continue;
+        }
+        s.freed += deltaTime;
+
+        // Gold from within, brightening; the stone warming toward gold.
+        const float glow = Easing::smoothstep01(s.freed / Tuning::kSoulGlowTime);
+        const float crumble = Easing::clamp01((s.freed - Tuning::kSoulGlowTime)
+                                              / Tuning::kSoulCrumbleTime);
+        for (SceneNode* part : s.parts)
+        {
+            part->material.emissive = glm::vec3(1.0f, 0.78f, 0.38f) * 1.3f * glow * (1.0f - crumble);
+            part->material.kd = glm::mix(kStone.kd, glm::vec3(0.9f, 0.78f, 0.5f), glow);
+            // Fading away as it crumbles - see-through parts go to the
+            // sorted transparent pass by themselves.
+            part->material.opacity = 1.0f - crumble;
+        }
+        s.body->visible = crumble < 0.999f;
+    }
+
+    // --- the offering ---------------------------------------------------------
+    if (m_offering != nullptr)
+    {
+        m_offering->visible = offeringFlight >= 0.0f;
+        if (m_offering->visible)
+        {
+            m_offeringSpin += deltaTime * 90.0f;
+            m_offering->position = offeringPosition();
+            m_offering->rotation = { 0.0f, m_offeringSpin, 0.0f };
+
+            // Small in his hands, full size in the ankh, and breathing there.
+            const float rest = (offeringFlight >= 1.0f) ? 1.0f + 0.08f * std::sin(time * 3.0f) : 1.0f;
+            m_offering->scale = glm::vec3((0.6f + 0.4f * offeringFlight) * rest);
+        }
+    }
+
+    // The ankh only turns once life has reached it.
+    m_relicSpin += deltaTime * 20.0f * gardenLifeAt(gardenAltar);
     for (std::size_t i = 0; i < m_relicSpinners.size(); ++i)
     {
-        m_relicSpinners[i]->rotation.y = time * 20.0f + 120.0f * static_cast<float>(i);
+        m_relicSpinners[i]->rotation.y = m_relicSpin + 120.0f * static_cast<float>(i);
+    }
+
+    // Each plant's shape follows the wave: fronds lift, flowers open.
+    for (Living& l : m_living)
+    {
+        const float life = Easing::smoothstep01(gardenLifeAt(l.where));
+        l.node->position = glm::mix(l.deadPosition, l.alivePosition, life);
+        l.node->scale    = glm::mix(l.deadScale,    l.aliveScale,    life);
+        l.node->rotation = glm::mix(l.deadRotation, l.aliveRotation, life);
     }
     if (m_relicOrb != nullptr)
     {
@@ -1509,7 +1586,10 @@ void Scene::update(float time, float deltaTime)
         {
             // Out of the top of the column and over in an arc, like the
             // heart's - a quadratic Bezier with its apex lifted.
-            const glm::vec3 from = djinnEmitterPosition() + glm::vec3(0.0f, 2.6f, 0.0f);
+            // From the Djinn's own hand when he is there to give it.
+            const glm::vec3 from = (djinnPresence > 0.3f)
+                ? djinnHand
+                : djinnEmitterPosition() + glm::vec3(0.0f, 2.6f, 0.0f);
             const glm::vec3 apex = (from + orbit) * 0.5f + glm::vec3(0.0f, 2.2f, 0.0f);
             const float u = m_charmFlight;
             place = glm::mix(glm::mix(from, apex, u), glm::mix(apex, orbit, u), u);
@@ -1608,11 +1688,16 @@ void Scene::updateLights(float time)
 
     // --- two warm torch point lights ---------------------------------------
     // Anchored to the flame nodes, so they inherit any movement for free.
+    // In the garden the chamber's and corridor's torches are far behind him
+    // and light nothing he can see: the budget goes to the garden instead.
+    const bool inGarden = traveller != nullptr
+                       && traveller->position.z > Tuning::kGardenFrontZ;
+
     int chamberTorchId = -1;
     for (SceneNode* torch : { torchLeft, torchRight })
     {
         ++chamberTorchId;
-        if (torch == nullptr) { continue; }
+        if (torch == nullptr || inGarden) { continue; }
 
         SceneNode* flame = torch->find("Flame");
         if (flame == nullptr) { continue; }
@@ -1659,6 +1744,51 @@ void Scene::updateLights(float time)
         lights.push_back(heartLight);
     }
 
+    // --- the souls: the brightest few light the garden as they go -------------
+    {
+        int lit = 0;
+        for (int i = 0; i < soulCount() && lit < 3; ++i)
+        {
+            if (static_cast<int>(lights.size()) >= kMaxLights) { break; }
+            const Statue& s = m_statues[i];
+            if (s.freed < 0.0f) { continue; }
+
+            // While the statue glows, its chest; after, the soul - until it
+            // is high enough to light nothing.
+            const bool rising = s.freed >= Tuning::kSoulGlowTime;
+            const glm::vec3 at = rising ? soulPosition(i) : statueChest(i);
+            const float strength = rising ? soulGlow(i) * Easing::clamp01(1.0f - (at.y - 2.0f) / 10.0f)
+                                          : Easing::smoothstep01(s.freed / Tuning::kSoulGlowTime);
+            if (strength < 0.05f) { continue; }
+
+            Light soul;
+            soul.type      = LightType::Point;
+            soul.position  = at;
+            soul.color     = { 1.0f, 0.85f, 0.5f };
+            soul.intensity = 2.2f * strength;
+            soul.constant  = 1.0f;
+            soul.linear    = 0.2f;
+            soul.quadratic = 0.12f;
+            lights.push_back(soul);
+            ++lit;
+        }
+    }
+
+    // --- the offering on the altar: the garden's warm heart -------------------
+    if (m_offering != nullptr && offeringFlight >= 0.0f
+        && static_cast<int>(lights.size()) < kMaxLights)
+    {
+        Light heart;
+        heart.type      = LightType::Point;
+        heart.position  = offeringPosition();
+        heart.color     = { 1.0f, 0.80f, 0.45f };
+        heart.intensity = (2.0f + 2.5f * offeringFlight) * (1.0f + 0.15f * std::sin(time * 3.0f));
+        heart.constant  = 1.0f;
+        heart.linear    = 0.09f;
+        heart.quadratic = 0.02f;
+        lights.push_back(heart);
+    }
+
     // --- the treasure's own glow ---------------------------------------------
     if (treasure != nullptr && treasure->visible && treasureJewel != nullptr)
     {
@@ -1683,7 +1813,9 @@ void Scene::updateLights(float time)
     {
         Light djinn;
         djinn.type      = LightType::Point;
-        djinn.position  = energyColumn->worldPosition() + glm::vec3(0.0f, 1.2f, 0.0f);
+        // Up into his chest while he stands over the lamp.
+        djinn.position  = glm::mix(energyColumn->worldPosition() + glm::vec3(0.0f, 1.2f, 0.0f),
+                                   djinnChest, Easing::clamp01(djinnPresence));
         djinn.color     = { 0.22f, 0.85f, 1.0f };
         djinn.intensity = 5.0f * m_column;
 
@@ -1733,7 +1865,7 @@ void Scene::updateLights(float time)
     // shader can take. Uploading only the closest keeps the count bounded
     // however long the corridor gets, and the far ones contribute almost
     // nothing anyway once attenuation has had its way with them.
-    if (!corridorTorches.empty() && traveller != nullptr)
+    if (!corridorTorches.empty() && traveller != nullptr && !inGarden)
     {
         constexpr int kCorridorTorchBudget = 2;
 
@@ -2036,7 +2168,10 @@ void Scene::buildSanctuary()
 void Scene::buildGarden()
 {
     // A small walled garden open to the night sky, beyond the constellation
-    // gate. Built from the same seven primitives as everything else.
+    // gate - dead when he finds it. Every plant has a living look and a dead
+    // one: its colours are swapped in the shader (Material::living) as the
+    // wave of life passes each pixel, and its shape - fronds lifting, flowers
+    // opening - is swapped per node through m_living.
     SceneNode* garden = m_root->createChild("HiddenGarden");
 
     const float front = Tuning::kGardenFrontZ;
@@ -2052,37 +2187,73 @@ void Scene::buildGarden()
         return dist(rng);
     };
 
-    // --- materials ---------------------------------------------------------------
-    Material grass;
-    // A deeper green than it looks here: the moonlight washes it out.
-    grass.ka = { 0.03f, 0.07f, 0.02f };  grass.kd = { 0.08f, 0.30f, 0.06f };
-    grass.ks = { 0.02f, 0.04f, 0.02f };  grass.shininess = 6.0f;
+    // A living material: the alive colours as given, and what it looks like
+    // dead - dry, grey-brown, no glow.
+    auto living = [](Material alive, const glm::vec3& deadKd)
+    {
+        alive.living       = true;
+        alive.deadKd       = deadKd;
+        alive.deadKa       = deadKd * 0.18f;
+        alive.deadKs       = { 0.03f, 0.03f, 0.03f };
+        alive.deadEmissive = { 0.0f, 0.0f, 0.0f };
+        return alive;
+    };
 
-    // Leaves get more ambient and a faint glow of their own: lit only from
-    // above by the moon, the fronds and bushes read as black silhouettes.
-    Material leaf = grass;
-    leaf.ka = { 0.06f, 0.16f, 0.05f };  leaf.kd = { 0.20f, 0.55f, 0.16f };
-    leaf.ks = { 0.15f, 0.25f, 0.15f };  leaf.emissive = { 0.02f, 0.07f, 0.02f };
-    Material darkLeaf = leaf;
-    darkLeaf.kd = { 0.12f, 0.40f, 0.12f };  darkLeaf.emissive = { 0.015f, 0.05f, 0.015f };
+    // Registers a node whose SHAPE changes with life.
+    auto shaped = [this](SceneNode* node, const glm::vec3& where) -> Living&
+    {
+        Living l;
+        l.node = node;
+        l.where = where;
+        l.alivePosition = l.deadPosition = node->position;
+        l.aliveScale    = l.deadScale    = node->scale;
+        l.aliveRotation = l.deadRotation = node->rotation;
+        m_living.push_back(l);
+        return m_living.back();
+    };
+
+    // --- materials ---------------------------------------------------------------
+    Material grassAlive;
+    // A deep, natural green: brighter than this read as flat lime under the
+    // moon, the jewel's light and the wave's glow together.
+    grassAlive.ka = { 0.02f, 0.05f, 0.015f };  grassAlive.kd = { 0.045f, 0.19f, 0.035f };
+    grassAlive.ks = { 0.02f, 0.04f, 0.02f };  grassAlive.shininess = 6.0f;
+    const Material grass = living(grassAlive, { 0.13f, 0.10f, 0.06f });   // dry dead earth; lighter washed out to white
+
+    Material leafAlive = grassAlive;
+    leafAlive.ka = { 0.06f, 0.16f, 0.05f };  leafAlive.kd = { 0.20f, 0.55f, 0.16f };
+    // Leaves glow faintly green of their own accord: lit only from above,
+    // fronds and bushes otherwise read as black even when alive.
+    leafAlive.ks = { 0.15f, 0.25f, 0.15f };  leafAlive.emissive = { 0.05f, 0.17f, 0.04f };
+    const Material leaf = living(leafAlive, { 0.28f, 0.22f, 0.14f });
+
+    Material darkLeafAlive = leafAlive;
+    darkLeafAlive.kd = { 0.12f, 0.40f, 0.12f };  darkLeafAlive.emissive = { 0.035f, 0.12f, 0.03f };
+    const Material darkLeaf = living(darkLeafAlive, { 0.22f, 0.17f, 0.11f });
+
     Material trunk;
     trunk.ka = { 0.05f, 0.04f, 0.03f };  trunk.kd = { 0.36f, 0.25f, 0.15f };
     trunk.ks = { 0.05f, 0.05f, 0.05f };  trunk.shininess = 6.0f;
 
-    Material water;
-    water.ka = { 0.02f, 0.05f, 0.08f };  water.kd = { 0.08f, 0.25f, 0.38f };
-    water.ks = { 0.9f, 0.95f, 1.0f };    water.shininess = 96.0f;
-    water.emissive = { 0.02f, 0.06f, 0.09f };
-    water.opacity = 0.75f;
+    Material waterAlive;
+    waterAlive.ka = { 0.02f, 0.05f, 0.08f };  waterAlive.kd = { 0.08f, 0.25f, 0.38f };
+    waterAlive.ks = { 0.9f, 0.95f, 1.0f };    waterAlive.shininess = 96.0f;
+    waterAlive.emissive = { 0.05f, 0.18f, 0.26f };   // it glows once alive
+    waterAlive.opacity = 0.75f;
+    Material water = living(waterAlive, { 0.05f, 0.06f, 0.07f });
+    water.deadKs = { 0.3f, 0.3f, 0.3f };          // still water still shines
 
-    Material relicGold = kGold;
-    relicGold.emissive = { 0.35f, 0.26f, 0.08f };
+    Material relicGoldAlive = kGold;
+    relicGoldAlive.emissive = { 0.35f, 0.26f, 0.08f };
+    const Material relicGold = living(relicGoldAlive, kGold.kd * 0.42f);
 
-    Material crystal;
-    crystal.ka = { 0.05f, 0.14f, 0.16f };  crystal.kd = { 0.14f, 0.52f, 0.58f };
-    crystal.ks = { 0.75f, 0.95f, 1.0f };   crystal.shininess = 96.0f;
-    crystal.emissive = { 0.2f, 0.7f, 0.8f };
-    crystal.opacity = 0.88f;
+    Material crystalAlive;
+    crystalAlive.ka = { 0.05f, 0.14f, 0.16f };  crystalAlive.kd = { 0.14f, 0.52f, 0.58f };
+    crystalAlive.ks = { 0.75f, 0.95f, 1.0f };   crystalAlive.shininess = 96.0f;
+    crystalAlive.emissive = { 0.2f, 0.7f, 0.8f };
+    crystalAlive.opacity = 0.88f;
+    Material crystal = living(crystalAlive, { 0.12f, 0.16f, 0.18f });
+    crystal.deadEmissive = { 0.01f, 0.03f, 0.035f };
 
     Material sky;
     sky.ka = { 0.0f, 0.0f, 0.0f };  sky.kd = { 0.0f, 0.0f, 0.0f };  sky.ks = { 0.0f, 0.0f, 0.0f };
@@ -2104,14 +2275,17 @@ void Scene::buildGarden()
             { sideW + 0.6f, 6.0f, 0.6f }, wallMat);
     }
 
-    // Ivy hanging down the walls.
+    // Ivy down the walls: withered and shrunk up when dead.
     for (int i = 0; i < 18; ++i)
     {
         const float len = random(1.2f, 3.6f);
         const float side = (i % 2 == 0) ? -1.0f : 1.0f;
         const float z = front + 1.0f + random(0.0f, depth - 2.0f);
-        add(garden, "Ivy", &m_cube, { side * (half - 0.02f), 6.0f - len * 0.5f, z },
-            { 0.08f, len, random(0.25f, 0.6f) }, (i % 3 == 0) ? leaf : darkLeaf);
+        SceneNode* ivy = add(garden, "Ivy", &m_cube, { side * (half - 0.02f), 6.0f - len * 0.5f, z },
+                             { 0.08f, len, random(0.25f, 0.6f) }, (i % 3 == 0) ? leaf : darkLeaf);
+        Living& l = shaped(ivy, ivy->position);
+        l.deadScale.y = len * 0.45f;
+        l.deadPosition.y = 6.0f - len * 0.225f;
     }
 
     // --- a path of stepping stones to the relics ---------------------------------------
@@ -2123,7 +2297,7 @@ void Scene::buildGarden()
     }
 
     // --- the three relics ----------------------------------------------------------------
-    // The ankh, on a stepped pedestal at the heart of the garden. It turns slowly.
+    // The ankh, on a stepped pedestal at the heart of the garden: the altar.
     {
         const glm::vec3 at(0.0f, 0.0f, front + 7.5f);
         SceneNode* relic = garden->createChild("RelicAnkh");
@@ -2142,8 +2316,16 @@ void Scene::buildGarden()
 
         gardenRelics.push_back(at + glm::vec3(0.0f, 2.6f, 0.0f));
         gardenObstacles.push_back({ at.x, at.z, 1.05f });
+        gardenAltar = at;
+
+        // The offering: the treasure's own jewel, hidden until he lays it here.
+        m_offering = m_root->createChild("Offering");
+        m_offering->visible = false;
+        add(m_offering, "GemTop", &m_cone, { 0.0f, 0.16f, 0.0f }, { 0.62f, 0.55f, 0.62f }, kTreasure);
+        add(m_offering, "GemBottom", &m_cone, { 0.0f, -0.16f, 0.0f }, { 0.62f, 0.55f, 0.62f }, kTreasure)
+            ->rotation = { 180.0f, 0.0f, 0.0f };
     }
-    // A crystal orb on a column, to the left. It breathes light.
+    // A crystal orb on a column, to the left. It breathes light - once alive.
     {
         const glm::vec3 at(-5.0f, 0.0f, front + 5.5f);
         SceneNode* relic = garden->createChild("RelicOrb");
@@ -2163,13 +2345,13 @@ void Scene::buildGarden()
         add(relic, "Base", &m_cube, { 0.0f, 0.15f, 0.0f }, { 1.15f, 0.3f, 1.15f }, kSandstone);
         add(relic, "Shaft", &m_cube, { 0.0f, 1.9f, 0.0f }, { 0.6f, 3.2f, 0.6f }, kDarkStone);
         add(relic, "Pyramidion", &m_cone, { 0.0f, 3.8f, 0.0f }, { 0.62f, 0.6f, 0.62f }, relicGold);
-        add(relic, "Band", &m_torus, { 0.0f, 3.2f, 0.0f }, { 0.75f, 0.4f, 0.75f }, kGold);
+        add(relic, "Band", &m_torus, { 0.0f, 3.2f, 0.0f }, { 0.75f, 0.4f, 0.75f }, relicGold);
 
         gardenRelics.push_back(at + glm::vec3(0.0f, 2.4f, 0.0f));
         gardenObstacles.push_back({ at.x, at.z, 0.65f });
     }
 
-    // --- a pool behind the ankh, with lotus flowers -----------------------------------
+    // --- a pool behind the ankh: dark and still, its lotus flowers closed -----------
     {
         const glm::vec3 at(0.0f, 0.0f, front + 12.0f);
         add(garden, "PoolRim", &m_thinTorus, at + glm::vec3(0.0f, 0.08f, 0.0f),
@@ -2177,19 +2359,23 @@ void Scene::buildGarden()
         add(garden, "Water", &m_cylinder, at + glm::vec3(0.0f, 0.04f, 0.0f),
             { 3.6f, 0.06f, 3.6f }, water);
 
-        Material lotus = kFlesh;
-        lotus.kd = { 0.95f, 0.55f, 0.7f };  lotus.emissive = { 0.12f, 0.05f, 0.08f };
+        Material lotusAlive = kFlesh;
+        lotusAlive.kd = { 0.95f, 0.55f, 0.7f };  lotusAlive.emissive = { 0.12f, 0.05f, 0.08f };
+        const Material lotus = living(lotusAlive, { 0.33f, 0.30f, 0.28f });
+        const Material pad = living(leafAlive, { 0.24f, 0.20f, 0.14f });
         for (int i = 0; i < 3; ++i)
         {
             const float a = glm::radians(120.0f * static_cast<float>(i) + 20.0f);
             const glm::vec3 p = at + glm::vec3(std::cos(a) * 0.9f, 0.1f, std::sin(a) * 0.9f);
-            add(garden, "LotusPad", &m_cylinder, p, { 0.55f, 0.02f, 0.55f }, leaf);
-            add(garden, "Lotus", &m_cone, p + glm::vec3(0.0f, 0.12f, 0.0f), { 0.3f, 0.22f, 0.3f }, lotus);
+            add(garden, "LotusPad", &m_cylinder, p, { 0.55f, 0.02f, 0.55f }, pad);
+            SceneNode* flower = add(garden, "Lotus", &m_cone, p + glm::vec3(0.0f, 0.12f, 0.0f),
+                                    { 0.3f, 0.22f, 0.3f }, lotus);
+            shaped(flower, p).deadScale = { 0.12f, 0.12f, 0.12f };   // closed bud
         }
         gardenObstacles.push_back({ at.x, at.z, 1.95f });
     }
 
-    // --- palm trees in the corners ------------------------------------------------------
+    // --- palm trees in the corners: their fronds hang dead until life returns ------
     const glm::vec2 palms[4] = { { -7.0f, front + 1.8f }, { 7.0f, front + 1.8f },
                                  { -7.0f, back - 2.0f },  { 7.0f, back - 2.0f } };
     for (int t = 0; t < 4; ++t)
@@ -2197,6 +2383,7 @@ void Scene::buildGarden()
         SceneNode* palm = garden->createChild("Palm");
         palm->position = { palms[t].x, 0.0f, palms[t].y };
         palm->rotation = { 0.0f, random(0.0f, 360.0f), 0.0f };
+        const glm::vec3 where(palms[t].x, 0.0f, palms[t].y);
 
         // A trunk of four segments, each leaning a little more: a gentle curve.
         glm::vec3 top(0.0f);
@@ -2210,17 +2397,22 @@ void Scene::buildGarden()
             top += glm::vec3(std::sin(glm::radians(lean)) * 1.2f, std::cos(glm::radians(lean)) * 1.15f, 0.0f);
         }
 
-        // The crown: seven drooping fronds round the top.
+        // The crown: seven fronds, each on its own pivot at the top of the
+        // trunk. Rotating the pivot about Z swings a frond from hanging limp
+        // (dead) up to spread out (alive) - a hinge, like the lamp's lid.
         for (int f = 0; f < 7; ++f)
         {
             const float yaw = 360.0f * static_cast<float>(f) / 7.0f;
-            const float droop = glm::radians(105.0f);
-            const glm::vec3 out(-std::sin(droop), std::cos(droop), 0.0f);    // Rz(droop) on +Y
-            const float cy = std::cos(glm::radians(yaw)), sy = std::sin(glm::radians(yaw));
-            const glm::vec3 dir(out.x * cy, out.y, -out.x * sy);              // then Ry(yaw)
-            SceneNode* frond = add(palm, "Frond", &m_cone, top + dir * 1.1f,
+            SceneNode* pivot = palm->createChild("FrondPivot");
+            pivot->position = top;
+            pivot->rotation = { 0.0f, yaw, 105.0f };
+            SceneNode* frond = add(pivot, "Frond", &m_cone, { 0.0f, 1.1f, 0.0f },
                                    { 0.45f, 2.3f, 0.12f }, leaf);
-            frond->rotation = { 0.0f, yaw, 105.0f };
+
+            shaped(pivot, where).deadRotation = { 0.0f, yaw, 155.0f };
+            Living& l = shaped(frond, where);
+            l.deadScale = { 0.32f, 1.9f, 0.09f };
+            l.deadPosition = { 0.0f, 0.95f, 0.0f };
         }
         for (int c = 0; c < 3; ++c)
         {
@@ -2232,6 +2424,104 @@ void Scene::buildGarden()
         gardenObstacles.push_back({ palms[t].x, palms[t].y, 0.45f });
     }
 
+    // --- the statues: travellers Medusa caught long ago ----------------------------
+    // Each in the pose it was frozen in. Built like the traveller - legs that
+    // swing from the hip, a torso, arms from the shoulder - so the poses are
+    // just joint rotations.
+    {
+        Material stone = kStone;
+        stone.uvScale = { 1.5f, 1.5f };
+
+        struct Pose
+        {
+            float legL, legR;      // hip swing, degrees (negative: forward)
+            float armL, armR;      // shoulder swing (negative: forward / up)
+            float armSpread;       // out to the sides
+            float lean;            // torso, forward positive
+            float lower;           // body dropped toward the ground (kneeling)
+            float head;            // nod
+        };
+        struct Placed { glm::vec2 at; float yaw; Pose pose; float size; bool faceAltar; };
+
+        const Placed statues[7] = {
+            // reaching for the altar
+            { { -2.9f, front + 2.8f },  0.0f,  { -10.0f,  10.0f,  -20.0f, -85.0f, 10.0f, 10.0f, 0.0f,  10.0f }, 1.0f, true },
+            // shielding his eyes, turned back toward the gate - she came from there
+            { {  2.9f, front + 3.3f }, 180.0f, {  -8.0f,   8.0f,   15.0f, -150.0f, 25.0f, -8.0f, 0.0f, -12.0f }, 1.0f, false },
+            // kneeling in prayer before the altar
+            { { -5.4f, front + 9.6f },  0.0f,  {  -5.0f,  10.0f,  -60.0f, -60.0f, -15.0f, 12.0f, 0.65f, 18.0f }, 1.0f, true },
+            // running for the back wall
+            { {  5.5f, front + 9.2f },  20.0f, { -35.0f,  30.0f,   35.0f, -40.0f, 10.0f, 14.0f, 0.0f,   0.0f }, 1.0f, false },
+            // fallen to one knee, looking back
+            { { -2.9f, back - 1.3f },  180.0f, {  -8.0f,  12.0f,  -45.0f,  20.0f, 20.0f, -10.0f, 0.6f, -20.0f }, 1.0f, false },
+            // turning away, arm up against the light
+            { {  3.1f, back - 1.5f },  200.0f, {  10.0f, -15.0f, -120.0f,  10.0f, 15.0f, -5.0f, 0.0f, -15.0f }, 1.0f, false },
+            // a child, reaching for the pool
+            { {  2.7f, front + 10.1f }, 0.0f,  {  -5.0f,   5.0f,  -70.0f, -70.0f, 10.0f, 12.0f, 0.0f,  15.0f }, 0.72f, false },
+        };
+
+        for (const Placed& s : statues)
+        {
+            const glm::vec3 at(s.at.x, 0.0f, s.at.y);
+            float yaw = s.yaw;
+            if (s.faceAltar)
+            {
+                yaw = glm::degrees(std::atan2(gardenAltar.x - at.x, gardenAltar.z - at.z));
+            }
+            else if (s.size < 1.0f)   // the child faces the pool
+            {
+                const glm::vec3 pool(0.0f, 0.0f, front + 12.0f);
+                yaw = glm::degrees(std::atan2(pool.x - at.x, pool.z - at.z));
+            }
+
+            SceneNode* root = garden->createChild("Statue");
+            root->position = at;
+            root->rotation = { 0.0f, yaw, 0.0f };
+            root->scale = glm::vec3(s.size);
+
+            add(root, "Plinth", &m_cylinder, { 0.0f, 0.12f, 0.0f }, { 1.15f, 0.24f, 1.15f }, kDarkStone);
+
+            SceneNode* body = root->createChild("Body");
+            body->position = { 0.0f, 0.24f - s.pose.lower, 0.0f };
+
+            const Pose& p = s.pose;
+            SceneNode* legL = add(body, "LegL", &m_cylinder, { -0.22f, 0.6f, 0.0f }, { 0.26f, 1.2f, 0.26f }, stone);
+            legL->pivot = { 0.0f, 0.6f, 0.0f };
+            legL->rotation = { p.legL, 0.0f, 0.0f };
+            SceneNode* legR = add(body, "LegR", &m_cylinder, { 0.22f, 0.6f, 0.0f }, { 0.26f, 1.2f, 0.26f }, stone);
+            legR->pivot = { 0.0f, 0.6f, 0.0f };
+            legR->rotation = { p.legR, 0.0f, 0.0f };
+
+            SceneNode* torso = add(body, "Torso", &m_cube, { 0.0f, 1.75f, 0.0f }, { 0.8f, 1.2f, 0.42f }, stone);
+            torso->pivot = { 0.0f, -0.6f, 0.0f };
+            torso->rotation = { p.lean, 0.0f, 0.0f };
+
+            SceneNode* upper = torso->createChild("UpperBody");
+            upper->scale = { 1.0f / 0.8f, 1.0f / 1.2f, 1.0f / 0.42f };
+
+            SceneNode* head = add(upper, "Head", &m_sphere, { 0.0f, 0.9f, 0.0f }, { 0.5f, 0.56f, 0.5f }, stone);
+            head->rotation = { p.head, 0.0f, 0.0f };
+
+            SceneNode* armL = add(upper, "ArmL", &m_cylinder, { -0.55f, 0.05f, 0.0f }, { 0.2f, 1.0f, 0.2f }, stone);
+            armL->pivot = { 0.0f, 0.5f, 0.0f };
+            armL->rotation = { p.armL, 0.0f, p.armSpread };
+            SceneNode* armR = add(upper, "ArmR", &m_cylinder, { 0.55f, 0.05f, 0.0f }, { 0.2f, 1.0f, 0.2f }, stone);
+            armR->pivot = { 0.0f, 0.5f, 0.0f };
+            armR->rotation = { p.armR, 0.0f, -p.armSpread };
+
+            Statue statue;
+            statue.root = root;
+            statue.body = body;
+            statue.parts = { legL, legR, torso, head, armL, armR };
+            statue.phase = static_cast<float>(m_statues.size()) * 0.9f;
+            statue.position = at;
+            statue.size = s.size;
+            m_statues.push_back(statue);
+
+            gardenObstacles.push_back({ at.x, at.z, 0.6f * s.size });
+        }
+    }
+
     // --- bushes along the walls, and flowers everywhere -------------------------------
     for (int i = 0; i < 10; ++i)
     {
@@ -2240,9 +2530,12 @@ void Scene::buildGarden()
         for (int b = 0; b < 3; ++b)
         {
             const float r = random(0.7f, 1.1f);
-            add(garden, "Bush", &m_sphere,
-                at + glm::vec3(random(-0.4f, 0.4f), r * 0.4f, random(-0.4f, 0.4f)),
-                { r, r * 0.85f, r }, (b == 0) ? darkLeaf : leaf);
+            SceneNode* bush = add(garden, "Bush", &m_sphere,
+                                  at + glm::vec3(random(-0.4f, 0.4f), r * 0.4f, random(-0.4f, 0.4f)),
+                                  { r, r * 0.85f, r }, (b == 0) ? darkLeaf : leaf);
+            Living& l = shaped(bush, at);
+            l.deadScale = l.aliveScale * glm::vec3(0.75f, 0.6f, 0.75f);
+            l.deadPosition.y = r * 0.25f;
         }
     }
 
@@ -2251,7 +2544,7 @@ void Scene::buildGarden()
     {
         glm::vec3 at(random(-half + 1.0f, half - 1.0f), 0.0f, random(front + 1.0f, back - 1.0f));
 
-        // Not on the path, the relics or in the pool.
+        // Not on the path, the relics, the statues or in the pool.
         if (std::fabs(at.x) < 1.2f && at.z < front + 8.8f) { continue; }
         bool clear = true;
         for (const PropObstacle& o : gardenObstacles)
@@ -2260,11 +2553,23 @@ void Scene::buildGarden()
         }
         if (!clear) { continue; }
 
-        Material petal = kFlesh;
-        petal.kd = petals[i % 3];
-        petal.emissive = petals[i % 3] * 0.08f;
-        add(garden, "Stem", &m_cylinder, at + glm::vec3(0.0f, 0.25f, 0.0f), { 0.04f, 0.5f, 0.04f }, leaf);
-        add(garden, "Flower", &m_sphere, at + glm::vec3(0.0f, 0.55f, 0.0f), { 0.2f, 0.14f, 0.2f }, petal);
+        Material petalAlive = kFlesh;
+        petalAlive.kd = petals[i % 3];
+        petalAlive.emissive = petals[i % 3] * 0.2f;    // a bloom you can see from the camera
+        const Material petal = living(petalAlive, { 0.34f, 0.31f, 0.28f });
+
+        // Dead: a short shrivelled stem and a small closed bud.
+        SceneNode* stem = add(garden, "Stem", &m_cylinder, at + glm::vec3(0.0f, 0.25f, 0.0f),
+                              { 0.04f, 0.5f, 0.04f }, leaf);
+        Living& ls = shaped(stem, at);
+        ls.deadScale.y = 0.3f;
+        ls.deadPosition.y = 0.15f;
+
+        SceneNode* head = add(garden, "Flower", &m_sphere, at + glm::vec3(0.0f, 0.58f, 0.0f),
+                              { 0.34f, 0.2f, 0.34f }, petal);
+        Living& lh = shaped(head, at);
+        lh.deadScale = { 0.09f, 0.11f, 0.09f };
+        lh.deadPosition.y = 0.33f;
     }
 
     // --- the night sky: a moon and stars ---------------------------------------------
@@ -2281,6 +2586,73 @@ void Scene::buildGarden()
             { random(-30.0f, 30.0f), random(16.0f, 34.0f), random(front - 5.0f, back + 35.0f) },
             { size, size, size }, star);
     }
+}
+
+glm::vec3 Scene::statueChest(int i) const
+{
+    const Statue& s = m_statues[i];
+    return s.position + glm::vec3(0.0f, 2.0f * s.size, 0.0f);
+}
+
+bool Scene::soulVisible(int i) const
+{
+    const Statue& s = m_statues[i];
+    return s.freed >= Tuning::kSoulGlowTime && soulPosition(i).y < Tuning::kSoulSkyHeight;
+}
+
+glm::vec3 Scene::soulPosition(int i) const
+{
+    const Statue& s = m_statues[i];
+    const float t = std::max(0.0f, s.freed - Tuning::kSoulGlowTime);
+
+    // Up in a slow, widening spiral, gathering speed as it goes.
+    const float r = 0.6f * std::min(1.0f, t * 0.6f);
+    const float a = t * 1.8f + s.phase;
+    return statueChest(i) + glm::vec3(std::cos(a) * r,
+                                      Tuning::kSoulRiseSpeed * t + 0.06f * t * t,
+                                      std::sin(a) * r);
+}
+
+float Scene::soulGlow(int i) const
+{
+    const Statue& s = m_statues[i];
+    if (s.freed < Tuning::kSoulGlowTime) { return 0.0f; }
+    const float t = s.freed - Tuning::kSoulGlowTime;
+    const float appear = Easing::smoothstep01(t / 0.5f);
+    const float h = soulPosition(i).y;
+    const float fade = 1.0f - Easing::smoothstep01((h - (Tuning::kSoulSkyHeight - 6.0f)) / 6.0f);
+
+    // A firefly's flash, but slower and never fully dark: it is a soul.
+    const float flash = 0.75f + 0.25f * std::sin(t * 4.0f + s.phase);
+    return appear * fade * flash;
+}
+
+bool Scene::popFreedStatue(int& index)
+{
+    if (m_freedEvents.empty()) { return false; }
+    index = m_freedEvents.front();
+    m_freedEvents.erase(m_freedEvents.begin());
+    return true;
+}
+
+glm::vec3 Scene::offeringPosition() const
+{
+    // Inside the ankh's loop, which sits 3.15 above the pedestal's foot.
+    const glm::vec3 rest = gardenAltar + glm::vec3(0.0f, 3.15f, 0.0f);
+    const float u = Easing::clamp01(offeringFlight);
+    if (u >= 1.0f) { return rest; }
+
+    // Out of his hands and up in an arc, like the heart onto the scale.
+    const glm::vec3 apex = (offeringFrom + rest) * 0.5f + glm::vec3(0.0f, 1.6f, 0.0f);
+    const float e = Easing::smoothstep01(u);
+    return glm::mix(glm::mix(offeringFrom, apex, e), glm::mix(apex, rest, e), e);
+}
+
+float Scene::gardenLifeAt(const glm::vec3& where) const
+{
+    if (gardenWaveRadius <= 0.0f) { return 0.0f; }
+    const float d = glm::length(glm::vec2(where.x - gardenWaveCentre.x, where.z - gardenWaveCentre.z));
+    return Easing::clamp01((gardenWaveRadius - d) / 1.2f);
 }
 
 void Scene::buildCharm()
@@ -2633,6 +3005,10 @@ void Scene::draw(const Shader& shader, const glm::vec3& cameraPosition) const
     shader.setVec3 ("uStoneKd", Materials::petrified.kd);
     shader.setVec3 ("uStoneKs", Materials::petrified.ks);
     shader.setFloat("uStoneShininess", Materials::petrified.shininess);
+
+    // The garden's wave of life, for every living material.
+    shader.setVec3 ("uLifeCentre", gardenWaveCentre);
+    shader.setFloat("uLifeRadius", gardenWaveRadius);
 
     // --- pass 1: opaque, depth writes on ------------------------------------
     m_root->draw(shader);

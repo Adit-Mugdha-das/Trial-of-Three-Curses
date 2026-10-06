@@ -41,7 +41,7 @@ public:
     // Drawn in the same instanced batch for this frame only. Call after
     // update(), which clears them.
     void addGlow(const glm::vec3& position, float size, const glm::vec4& color);
-    static constexpr int kMaxGlows = 256;   // the chamber's fireflies and the gate's
+    static constexpr int kMaxGlows = 1024;  // fireflies, and the Djinn's smoke figure
 
     // Needs the camera basis to orient the billboards. Extract it from the
     // view matrix rather than the camera object: the view matrix is the

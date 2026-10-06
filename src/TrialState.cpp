@@ -27,7 +27,7 @@ float TrialController::durationOf(TrialState state)
         case TrialState::TreasureRevealed: return 0.0f;
         case TrialState::Escape:           return 0.0f;
         case TrialState::Sanctuary:        return Tuning::kSanctuaryDuration;
-        case TrialState::Garden:           return Tuning::kGardenDuration;
+        case TrialState::Garden:           return 0.0f;   // waits for the offering; main ends it
 
         case TrialState::Placing:          return 2.0f;
         case TrialState::Weighing:         return 3.0f;

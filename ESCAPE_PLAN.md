@@ -624,3 +624,24 @@ Stone frequency barely matters (0.85 s, 1.05 s and 1.3 s are within noise). The 
 lesson: hiding works against the gaze, but hiding for **every** attack lets Medusa
 catch up. The best play is to hide only when the beam would really hit you.
 (These runs end at the old exit; the real game now ends at the sanctuary, a little sooner.)
+
+---
+
+## 17. The Djinn appears, made of smoke
+
+`src/DjinnForm.h/.cpp` (no GL; 12 checks in `test_djinn`). About 450 particles, each with
+its own place in a figure: a swirling smoke tail out of the lamp, broad chest, head,
+turban, beard, two arms and two glowing golden eyes. Drawn through
+`ParticleSystem::addGlow` in one batch with the fireflies.
+
+- **Rises** 1.2 s into a true verdict: the particles leave the lamp lowest first, so he
+  builds up out of the smoke, then shimmers and breathes in place. He faces the traveller.
+- **Gives the charm** - it now flies from his hand.
+- **Points** as the treasure rises: one arm swings from raised onto the treasure, using
+  the hand on the treasure's side. A new camera shot frames him and the treasure together.
+- **Returns** 3.4 s later, or as soon as the treasure is taken: he pours back into the
+  lamp, head last.
+- While he is there, the old energy column, its rings and the rising smoke fade back so
+  they do not cover his body, and the lamp's light moves up into his chest.
+- First version was too faint (lost against the sandstone), too tall (head cut off) and
+  too thin (read as a stick figure); fixed after looking at frames saved from the game.

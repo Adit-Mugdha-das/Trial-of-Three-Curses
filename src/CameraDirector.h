@@ -38,6 +38,9 @@ public:
     // Seconds into the current state, for shots that change part way.
     void setStateTime(float seconds) { m_stateTime = seconds; }
 
+    // Seconds since the treasure was laid on the garden's altar; < 0 not yet.
+    void setOfferTime(float seconds) { m_offerTime = seconds; }
+
     // Which way the traveller is facing, in degrees. The Caught shot swings
     // round to his face, and his face can be pointing anywhere.
     void setFollowHeading(float degrees) { m_followHeading = degrees; }
@@ -60,6 +63,7 @@ private:
     float m_danger      = 0.0f;
     float m_lookUp      = 0.0f;
     float m_stateTime   = 0.0f;
+    float m_offerTime   = -1.0f;
     float m_followHeading = 180.0f;
 
     Shot shotFor(TrialState state) const;
