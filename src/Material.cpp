@@ -14,6 +14,8 @@ void Material::upload(const Shader& shader) const
     shader.setFloat("uMaterial.opacity", opacity);
 
     shader.setInt("uMaterial.living", living ? 1 : 0);
+    shader.setInt("uMaterial.sky", sky ? 1 : 0);
+    shader.setInt("uMaterial.rayTraced", rayTraced ? 1 : 0);
     if (living)
     {
         shader.setVec3("uMaterial.deadKa", deadKa);

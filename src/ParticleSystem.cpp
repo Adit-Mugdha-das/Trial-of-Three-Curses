@@ -228,9 +228,17 @@ void ParticleSystem::addGlow(const glm::vec3& position, float size, const glm::v
     ++m_glowCount;
 }
 
+void ParticleSystem::addGlowOnTop(const glm::vec3& position, float size, const glm::vec4& color)
+{
+    if (static_cast<int>(m_topGlows.size()) >= kMaxGlows * 8) { return; }
+    m_topGlows.insert(m_topGlows.end(), { position.x, position.y, position.z, size,
+                                          color.r, color.g, color.b, color.a });
+}
+
 void ParticleSystem::update(float deltaTime, float /*time*/)
 {
     m_glowCount = 0;
+    m_topGlows.clear();
 
     if (m_maxParticles == 0)
     {
@@ -313,7 +321,8 @@ void ParticleSystem::update(float deltaTime, float /*time*/)
 void ParticleSystem::render(const glm::mat4& view, const glm::mat4& projection)
 {
     const int total = m_aliveCount + m_glowCount;
-    if (total <= 0 || m_vao == 0)
+    const int onTop = static_cast<int>(m_topGlows.size() / 8);
+    if ((total <= 0 && onTop <= 0) || m_vao == 0)
     {
         return;
     }
@@ -355,7 +364,20 @@ void ParticleSystem::render(const glm::mat4& view, const glm::mat4& projection)
     glDisable(GL_CULL_FACE);
 
     glBindVertexArray(m_vao);
-    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, total);
+    if (total > 0)
+    {
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, total);
+    }
+
+    // The on-top glows: their own upload, drawn with the depth test off.
+    if (onTop > 0)
+    {
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_topGlows.size() * sizeof(float)),
+                     m_topGlows.data(), GL_STREAM_DRAW);
+        glDisable(GL_DEPTH_TEST);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, onTop);
+        glEnable(GL_DEPTH_TEST);
+    }
     glBindVertexArray(0);
 
     if (wasCulling == GL_TRUE)

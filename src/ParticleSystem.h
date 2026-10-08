@@ -41,7 +41,11 @@ public:
     // Drawn in the same instanced batch for this frame only. Call after
     // update(), which clears them.
     void addGlow(const glm::vec3& position, float size, const glm::vec4& color);
-    static constexpr int kMaxGlows = 1024;  // fireflies, and the Djinn's smoke figure
+
+    // The same, but drawn over everything (no depth test): a beam of light
+    // that must read as one unbroken ray, even past a wall or a plinth.
+    void addGlowOnTop(const glm::vec3& position, float size, const glm::vec4& color);
+    static constexpr int kMaxGlows = 2048;  // fireflies, the Djinn, the river of souls, the stars
 
     // Needs the camera basis to orient the billboards. Extract it from the
     // view matrix rather than the camera object: the view matrix is the
@@ -85,6 +89,7 @@ private:
     int m_maxParticles = 0;
     int m_aliveCount   = 0;
     int m_glowCount    = 0;
+    std::vector<float> m_topGlows;    // 8 floats each, like the instance data
 
     glm::vec3 m_emitterPosition{ 0.0f };
     float m_emitterStrength = 0.0f;

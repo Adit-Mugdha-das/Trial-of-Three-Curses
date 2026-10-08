@@ -19,6 +19,7 @@
 #include "Fireflies.h"
 #include "GatePuzzle.h"
 #include "DjinnForm.h"
+#include "Ascension.h"
 #include "Hud.h"
 #include "EscapeTuning.h"
 #include "Easing.h"
@@ -407,6 +408,33 @@ int main()
     glm::vec3 offerFrom(0.0f);
     std::mt19937 sparkleRng(2718u);
 
+    // The last twist: he was a soul all along, and at dawn he rises.
+    Ascension ascension;
+
+    // What sets it off: a ray of the risen sun strikes the pool, and its
+    // reflection strikes him. Seconds since it left the sun; < 0 = not yet.
+    float sunBeam = -1.0f;
+    constexpr float kBeamDown = 1.0f;     // sun to the water
+    constexpr float kBeamUp   = 0.6f;     // water to his chest
+    constexpr float kBeamHit  = kBeamDown + kBeamUp;
+    constexpr float kBeamEnd  = kBeamHit + 1.4f;
+    // Where the ray must strike the water to reach him: the mirror law (angle
+    // in = angle out) means it aims at his mirror image under the surface.
+    auto sunBeamPath = [&](const glm::vec3& feet, glm::vec3& sun, glm::vec3& water, glm::vec3& chest)
+    {
+        sun   = scene.sunPosition();
+        chest = feet + glm::vec3(0.0f, 1.25f, 0.0f);
+        const float wy = Scene::kWaterLevel;
+        const glm::vec3 mirrored(chest.x, 2.0f * wy - chest.y, chest.z);
+        water = sun + (mirrored - sun) * ((sun.y - wy) / (sun.y - mirrored.y));
+        // Kept inside the pool's rim.
+        const glm::vec3 c = scene.poolCentre();
+        glm::vec2 off(water.x - c.x, water.z - c.z);
+        const float r = glm::length(off);
+        if (r > Scene::kPoolRadius - 0.25f) { off *= (Scene::kPoolRadius - 0.25f) / r; }
+        water = glm::vec3(c.x + off.x, wy, c.z + off.y);
+    };
+
     // The Djinn, made of smoke, who rises when the lamp opens.
     DjinnForm djinn;
     djinn.init();
@@ -693,12 +721,13 @@ int main()
         {
             char title[256];
             snprintf(title, sizeof(title),
-                     "The Trial of Three Curses  |  %.0f FPS  |  %s  |  weight %.2f (%s)  |  %s",
+                     "The Trial of Three Curses  |  %.0f FPS  |  %s  |  weight %.2f (%s)  |  %s  |  ray tracing %s (Z)",
                      frameCount / fpsTimer,
                      inspectMode ? "INSPECT" : trial.stateName(),
                      trial.heartWeight(),
                      trial.isBalanced() ? "balanced" : "unbalanced",
-                     viewModeName(gViewMode));
+                     viewModeName(gViewMode),
+                     scene.rayTracing ? "ON" : "OFF");
             glfwSetWindowTitle(window, title);
 
             fpsTimer   = 0.0f;
@@ -728,6 +757,13 @@ int main()
         if (pressed(window, GLFW_KEY_J,  particleHeld)) { useParticles = !useParticles; }
         if (pressed(window, GLFW_KEY_U,  postHeld))     { usePost = !usePost; }
         if (pressed(window, GLFW_KEY_V,  normalMapHeld)) { useNormalMaps = !useNormalMaps; }
+        static bool rayHeld = false;
+        if (pressed(window, GLFW_KEY_Z,  rayHeld))
+        {
+            scene.rayTracing = !scene.rayTracing;
+            std::cout << "[RayTrace] garden pool reflections "
+                      << (scene.rayTracing ? "ON" : "OFF") << std::endl;
+        }
 
         // Debug: lose on demand. Without this you have to deliberately run
         // badly every time you want to check the losing ending, which gets
@@ -1331,6 +1367,9 @@ int main()
                 collapse.reset();
                 clearCollapse();
                 puzzleActive = false;
+                ascension.reset();
+                sunBeam = -1.0f;
+                scene.charmShattered = false;
 
                 // The gate closes again behind the garden, and it dies again.
                 gardenOpenLevel = 0.0f;
@@ -1550,6 +1589,7 @@ int main()
 
         // Always updated, even with no input, so he decelerates rather than
         // stopping dead the instant control is taken away.
+        if (ascension.active()) { walkDirection = glm::vec3(0.0f); }   // he no longer walks
         player.update(walkDirection, deltaTime);
 
         // Once it is up, the dome keeps him in as well as her out.
@@ -1562,6 +1602,12 @@ int main()
         if (scene.traveller != nullptr)
         {
             player.applyTo(*scene.traveller);
+
+            // Rising into the sky, wherever the timeline carries him.
+            if (ascension.active())
+            {
+                scene.traveller->position = ascension.soulPosition();
+            }
         }
 
         // Feed his real speed to the walk cycle, so the legs move at the rate
@@ -1727,15 +1773,37 @@ int main()
                               + glm::vec3(0.0f, 2.35f, 0.0f)
                               + facing * 0.30f);
         }
+        else if (ascension.active() || sunBeam >= 0.0f)
+        {
+            // The ascension's own shots: from an eye point to a look point,
+            // turned into the orbit camera's target, distance, yaw and pitch.
+            // Before it, the sun beam's: the sun, the pool and him in one view.
+            if (gViewMode == ViewMode::Cinematic)
+            {
+                const Ascension::Shot shot = ascension.active()
+                    ? ascension.camera()
+                    : Ascension::Shot{ { 3.2f, 3.2f, Tuning::kGardenFrontZ + 1.2f },
+                                       { -0.3f, 2.6f, Tuning::kGardenFrontZ + 11.0f } };
+                const glm::vec3 d = shot.eye - shot.look;
+                const float distance = std::max(1.0f, glm::length(d));
+                gCamera.setTarget(shot.look);
+                gCamera.setDistance(distance);
+                gCamera.setYaw(glm::degrees(std::atan2(d.z, d.x)));
+                gCamera.setPitch(glm::degrees(std::asin(glm::clamp(d.y / distance, -1.0f, 1.0f))));
+            }
+        }
         else
         {
             keepCameraOutOfWalls(gCamera, trial.state());
         }
 
+        // Far enough to see the cloud sea, the sky sun and the stars.
+        gCamera.setFarPlane(ascension.active() ? 900.0f : 200.0f);
+
         // Camera shake, applied last so nothing overwrites it. Two sines at
         // unrelated frequencies per axis, so it reads as a rumble rather
         // than a wobble.
-        if (cameraShake > 0.001f)
+        if (cameraShake > 0.001f && !ascension.active())
         {
             const float amount = cameraShake * 0.35f;
             const glm::vec3 jolt(
@@ -1766,6 +1834,9 @@ int main()
                                deltaTime);
 
         scene.applyCollapse(collapse, now);
+
+        ascension.update(deltaTime);
+        scene.applyAscension(ascension);
 
         scene.sanctuaryLevel = sanctuaryLevel;
         for (int k = 0; k < GatePuzzle::kRings; ++k)
@@ -1822,9 +1893,34 @@ int main()
                 }
             }
 
-            // The ending has played out: a new traveller.
-            if (waveT > Tuning::kWaveTime + Tuning::kGardenLinger
-                && trial.state() == TrialState::Garden)
+            // Dawn has come: a ray of the sun strikes the pool, and its
+            // reflection strikes him...
+            if (sunBeam < 0.0f && !ascension.active() && trial.state() == TrialState::Garden
+                && offerTime >= Tuning::kOfferFlight + Tuning::kDawnStart + Tuning::kDawnTime + 6.0f)
+            {
+                sunBeam = 0.0f;
+                std::cout << "[SunBeam] a ray of the sun strikes the pool" << std::endl;
+            }
+            else if (sunBeam >= 0.0f)
+            {
+                sunBeam += deltaTime;
+            }
+
+            // ...he was a soul too, and now he rises.
+            if (!ascension.active() && trial.state() == TrialState::Garden
+                && sunBeam >= kBeamHit + 0.35f)
+            {
+                ascension.begin(player.position());
+                scene.charmShattered = true;
+                std::cout << "[Ascension] the charm breaks - he was a soul all along" << std::endl;
+                if (particlesAvailable)
+                {
+                    particles.burst(scene.charmWorldPosition(), 90, glm::vec3(0.35f, 0.9f, 1.0f), 3.5f);
+                }
+            }
+
+            // It has all played out: a new traveller.
+            if (ascension.finished() && trial.state() == TrialState::Garden)
             {
                 trial.reset();
             }
@@ -1835,6 +1931,19 @@ int main()
             scene.gardenWaveRadius = -1.0f;
         }
         scene.gardenWaveCentre = scene.gardenAltar;
+
+        // Dawn, once the souls are mostly up.
+        scene.dawn = (offerTime < 0.0f) ? 0.0f
+            : Easing::smoothstep01((offerTime - Tuning::kOfferFlight - Tuning::kDawnStart)
+                                   / Tuning::kDawnTime);
+        {
+            static bool dawnAnnounced = false;
+            if (scene.dawn > 0.0f && !dawnAnnounced)
+            {
+                std::cout << "[Garden] dawn breaks over the garden" << std::endl;
+            }
+            dawnAnnounced = scene.dawn > 0.0f;
+        }
         gDirector.setOfferTime(offerTime);
 
         // The gate shot starts 4.5 s in (see CameraDirector); from then he
@@ -1921,14 +2030,24 @@ int main()
                                           : "[Djinn] pours back into the lamp") << std::endl;
                 }
 
+                // First he reaches his hand out to the traveller, and the charm
+                // leaves it; then, once the treasure rises, he points to it.
                 static bool pointed = false;
-                const float point = (st == TrialState::TreasureRevealed)
-                                  ? Easing::smoothstep01((t - 0.1f) / 0.6f) : 0.0f;
-                if (point > 0.0f && !pointed) { std::cout << "[Djinn] points to the treasure" << std::endl; }
+                const bool giving = (st == TrialState::Balanced);
+                const float point = giving
+                    ? Easing::smoothstep01((t - 3.0f) / 0.6f)
+                    : (st == TrialState::TreasureRevealed) ? Easing::smoothstep01((t - 0.1f) / 0.6f) : 0.0f;
+                if (point > 0.0f && !pointed)
+                {
+                    std::cout << (giving ? "[Djinn] holds out his hand to the traveller"
+                                         : "[Djinn] points to the treasure") << std::endl;
+                }
                 pointed = point > 0.0f;
 
                 djinn.faceTowards(player.position(), deltaTime);
-                djinn.setPointing(scene.treasureWorldPosition() + glm::vec3(0.0f, 0.6f, 0.0f), point);
+                djinn.setPointing(giving ? player.position() + glm::vec3(0.0f, 1.4f, 0.0f)
+                                         : scene.treasureWorldPosition() + glm::vec3(0.0f, 0.6f, 0.0f),
+                                  point);
                 djinn.update(deltaTime, now);
 
                 if (djinn.visible())
@@ -2033,6 +2152,204 @@ int main()
                 }
             }
 
+            // --- the sun's ray, off the pool, into him ----------------------------
+            if (sunBeam >= 0.0f && sunBeam < kBeamEnd)
+            {
+                glm::vec3 sun, water, chest;
+                sunBeamPath(player.position(), sun, water, chest);
+                const glm::vec3 in = glm::normalize(water - sun);
+                // The reflected ray: reflect() about the water's normal.
+                glm::vec3 out = glm::reflect(in, glm::vec3(0.0f, 1.0f, 0.0f));
+                const float upLength = glm::length(chest - water);
+                if (glm::length(water + out * upLength - chest) > 0.3f)
+                {
+                    out = glm::normalize(chest - water);   // only if the rim moved the spot
+                }
+                const float fade = 1.0f - Easing::smoothstep01(Easing::clamp01((sunBeam - kBeamHit - 0.4f) / 1.0f));
+                const float shimmer = 0.85f + 0.15f * std::sin(now * 23.0f);
+
+                // Down from the sun: the head of the ray travels to the water.
+                const float downLength = glm::length(water - sun);
+                const float down = Easing::clamp01(sunBeam / kBeamDown);
+                const float headFromWater = downLength * (1.0f - down * down);
+                for (float s = 0.0f; s < downLength; s += (s < 30.0f ? 0.35f : 1.2f))
+                {
+                    if (s < headFromWater) { continue; }
+                    const glm::vec3 p = water - in * s;
+                    const float far = Easing::clamp01(s / 60.0f);
+                    particles.addGlowOnTop(p, 0.2f + 0.5f * far, { 1.0f, 0.95f, 0.75f, 0.9f * fade * shimmer });
+                    particles.addGlowOnTop(p, 0.8f + 1.5f * far, { 1.0f, 0.78f, 0.35f, 0.28f * fade });
+                }
+
+                // Up off the water into his chest.
+                const float up = Easing::clamp01((sunBeam - kBeamDown) / kBeamUp);
+                for (float s = 0.0f; s < upLength * up; s += 0.25f)
+                {
+                    const glm::vec3 p = water + out * s;
+                    particles.addGlowOnTop(p, 0.22f, { 1.0f, 0.97f, 0.8f, 0.95f * fade * shimmer });
+                    particles.addGlowOnTop(p, 0.9f, { 1.0f, 0.8f, 0.4f, 0.3f * fade });
+                }
+
+                // A flash where it strikes the water, and a bigger one in him.
+                static bool splashed = false, struck = false;
+                if (sunBeam < 0.05f) { splashed = false; struck = false; }
+                if (down >= 1.0f)
+                {
+                    particles.addGlowOnTop(water, 2.6f * shimmer, { 1.0f, 0.92f, 0.65f, 0.75f * fade });
+                    if (!splashed)
+                    {
+                        splashed = true;
+                        particles.burst(water + glm::vec3(0.0f, 0.1f, 0.0f), 40, glm::vec3(1.0f, 0.9f, 0.6f), 2.5f);
+                    }
+                }
+                if (up >= 1.0f)
+                {
+                    const float flash = 1.0f - Easing::clamp01((sunBeam - kBeamHit) / 1.2f);
+                    particles.addGlowOnTop(chest, 1.2f + 4.0f * flash, { 1.0f, 0.88f, 0.5f, 0.9f * fade });
+                    if (!struck)
+                    {
+                        struck = true;
+                        std::cout << "[SunBeam] its reflection strikes him" << std::endl;
+                        particles.burst(chest, 70, glm::vec3(1.0f, 0.85f, 0.45f), 3.0f);
+                    }
+                }
+            }
+
+            // --- the ascension: his soul, the river, the stars --------------------
+            if (ascension.active())
+            {
+                // Him: a bright orb at his chest, which is all that is left of
+                // him once the body has turned to light.
+                const float orb = ascension.soulOrb();
+                if (orb > 0.01f)
+                {
+                    const glm::vec3 at = ascension.soulPosition() + glm::vec3(0.0f, 1.4f, 0.0f);
+                    particles.addGlow(at, 0.9f, { 1.0f, 1.0f, 0.85f, orb });
+                    particles.addGlow(at, 4.0f, { 1.0f, 0.85f, 0.45f, 0.65f * orb });
+                    static float trail = 0.0f;
+                    trail += deltaTime;
+                    if (trail > 0.05f)
+                    {
+                        trail = 0.0f;
+                        particles.burst(at, 2, glm::vec3(1.0f, 0.88f, 0.55f), 0.6f);
+                    }
+                }
+
+                // The river of souls flowing to Ra's boat: gold, sky-blue and
+                // rose lights, each with a halo, shedding sparkles.
+                static const glm::vec3 soulColours[3] = {
+                    { 1.0f, 0.80f, 0.35f }, { 0.45f, 0.82f, 1.0f }, { 1.0f, 0.50f, 0.72f } };
+                static int sparkleTurn = 0;
+                for (int i = 0; i < Ascension::kRiver; ++i)
+                {
+                    const float g = ascension.riverGlow(i);
+                    if (g < 0.01f) { continue; }
+                    const glm::vec3 p = ascension.riverPosition(i);
+                    const glm::vec3& c = soulColours[i % 3];
+                    const float pulse = 0.85f + 0.15f * std::sin(now * 5.0f + static_cast<float>(i));
+                    particles.addGlow(p, 0.75f * pulse, { glm::mix(c, glm::vec3(1.0f), 0.6f), g });
+                    particles.addGlow(p, 2.2f, { c.r, c.g, c.b, 0.5f * g });
+                    if (g > 0.3f && (i + sparkleTurn) % 40 == 0)
+                    {
+                        particles.burst(p, 1, c, 0.5f);
+                    }
+                }
+                ++sparkleTurn;
+
+                // ---- 3. the sun's path: a shimmering gold road across the clouds
+                const float sunRoad = ascension.skySun() * (1.0f - ascension.skyNight());
+                if (sunRoad > 0.01f)
+                {
+                    const glm::vec3 sunAt = ascension.skySunPosition();
+                    const glm::vec3 from(sunAt.x, 87.0f, ascension.boatPosition().z - 25.0f);
+                    const glm::vec3 to(sunAt.x, 87.0f, sunAt.z - 20.0f);
+                    for (int k = 0; k < 44; ++k)
+                    {
+                        const float u = static_cast<float>(k) / 43.0f;
+                        const float wave = std::sin(now * 1.3f + static_cast<float>(k) * 2.1f);
+                        glm::vec3 p = glm::mix(from, to, u);
+                        p.x += wave * (1.5f + 9.0f * u);
+                        const float shimmer = 0.6f + 0.4f * std::sin(now * 3.0f + static_cast<float>(k) * 1.7f);
+                        particles.addGlow(p, 5.0f + 14.0f * u, { 1.0f, 0.80f, 0.45f, 0.42f * shimmer * sunRoad });
+                    }
+                }
+
+                // ---- 5. the boat's lamps, its warm light on the clouds, and gold
+                // dripping from the oars
+                const float boatShow = ascension.boat();
+                if (boatShow > 0.01f)
+                {
+                    for (const glm::vec3& lampAt : scene.boatLamps())
+                    {
+                        particles.addGlow(lampAt, 0.9f, { 1.0f, 0.95f, 0.75f, boatShow });
+                        particles.addGlow(lampAt, 3.2f, { 1.0f, 0.75f, 0.35f, 0.55f * boatShow });
+                    }
+                    const glm::vec3 b = ascension.boatPosition();
+                    particles.addGlow({ b.x, 87.5f, b.z }, 28.0f, { 1.0f, 0.70f, 0.38f, 0.38f * boatShow });
+                    particles.addGlow(b + glm::vec3(0.0f, 1.0f, 0.0f), 14.0f, { 1.0f, 0.82f, 0.5f, 0.3f * boatShow });
+
+                    // A soft gold aura round each soul-bird, and a faint trail.
+                    static float birdTrail = 0.0f;
+                    birdTrail += deltaTime;
+                    const bool shed = birdTrail > 0.12f;
+                    if (shed) { birdTrail = 0.0f; }
+                    for (const glm::vec3& birdAt : scene.baBirds())
+                    {
+                        particles.addGlow(birdAt, 3.5f, { 1.0f, 0.85f, 0.5f, 0.35f * boatShow });
+                        if (shed) { particles.burst(birdAt, 1, glm::vec3(1.0f, 0.85f, 0.5f), 0.3f); }
+                    }
+
+                    static float drip = 0.0f;
+                    drip += deltaTime;
+                    const std::vector<glm::vec3> blades = scene.oarBlades();
+                    if (drip > 0.06f && !blades.empty())
+                    {
+                        drip = 0.0f;
+                        static int nextBlade = 0;
+                        nextBlade = (nextBlade + 3) % static_cast<int>(blades.size());
+                        particles.burst(blades[nextBlade], 2, glm::vec3(1.0f, 0.82f, 0.4f), 0.5f);
+                    }
+                }
+
+                // The sun above the clouds.
+                if (ascension.skySun() > 0.01f)
+                {
+                    const float s = ascension.skySun();
+                    particles.addGlow(ascension.skySunPosition(), 140.0f, { 1.0f, 0.75f, 0.4f, 0.55f * s });
+                    particles.addGlow(ascension.skySunPosition(), 70.0f, { 1.0f, 0.85f, 0.55f, 0.6f * s });
+                }
+
+                // The constellations of his journey, and his own star.
+                for (int i = 0; i < ascension.starCount(); ++i)
+                {
+                    const float g = ascension.starGlow(i);
+                    if (g < 0.01f) { continue; }
+                    const glm::vec3 p = ascension.starPosition(i);
+                    const float size = ascension.starSize(i);
+                    particles.addGlow(p, size, { 1.0f, 0.97f, 0.85f, std::min(1.0f, g) });
+                    if (size > 1.0f)
+                    {
+                        particles.addGlow(p, size * 3.0f, { 0.85f, 0.9f, 1.0f, 0.4f * std::min(1.0f, g) });
+                    }
+                }
+                const float heart = ascension.heartGlow();
+                if (heart > 0.01f)
+                {
+                    const float beat = 1.0f + 0.15f * std::sin(now * 4.0f);
+                    particles.addGlow(ascension.heartStar(), 2.6f * beat, { 1.0f, 0.95f, 0.8f, heart });
+                    particles.addGlow(ascension.heartStar(), 10.0f * beat, { 1.0f, 0.8f, 0.45f, 0.55f * heart });
+                }
+            }
+
+            // --- a soft halo round the rising sun ---------------------------------
+            if (scene.dawn > 0.01f)
+            {
+                const float d = scene.dawn;
+                const glm::vec3 c = glm::mix(glm::vec3(1.0f, 0.5f, 0.2f), glm::vec3(1.0f, 0.88f, 0.6f), d);
+                particles.addGlow(scene.sunPosition(), 70.0f, { c.r, c.g, c.b, 0.55f * d });
+                particles.addGlow(scene.sunPosition(), 32.0f, { c.r, c.g, c.b, 0.6f * d });
+            }
+
             // The garden's fireflies, gathered round the relics.
             if (gardenOpenLevel > 0.01f)
             {
@@ -2041,8 +2358,9 @@ int main()
                     Fireflies& swarm = gardenFlies[s];
                     swarm.update(deltaTime, player.position(), 0.0f);
 
-                    // Barely there while the garden is dead.
-                    const float alive = 0.2f + 0.8f * scene.gardenLifeAt(scene.gardenRelics[s]);
+                    // Barely there while the garden is dead, and fading with the night.
+                    const float alive = (0.2f + 0.8f * scene.gardenLifeAt(scene.gardenRelics[s]))
+                                      * (1.0f - 0.75f * scene.dawn);
                     for (int i = 0; i < swarm.count(); ++i)
                     {
                         const float glow = swarm.glow(i) * gardenOpenLevel * alive;
@@ -2153,7 +2471,31 @@ int main()
             post.beginScene();
         }
 
-        glClearColor(0.06f, 0.03f, 0.10f, 1.0f);
+        // The sky: night purple, through sunrise orange, to morning blue.
+        glm::vec3 skyZenith(0.0f), skyHorizon(0.0f), skyGlow(0.0f);
+        {
+            const float d = Easing::clamp01(scene.dawn);
+            const glm::vec3 night(0.06f, 0.03f, 0.10f), sunrise(0.86f, 0.42f, 0.28f),
+                            morning(0.42f, 0.62f, 0.88f);
+            const glm::vec3 sky = (d < 0.5f)
+                ? glm::mix(night, sunrise, Easing::smoothstep01(d / 0.5f))
+                : glm::mix(sunrise, morning, Easing::smoothstep01((d - 0.5f) / 0.5f));
+            glm::vec3 finalSky = sky;
+            if (ascension.active())
+            {
+                // Gold above the clouds, then night for the stars.
+                finalSky = glm::mix(finalSky, glm::vec3(0.98f, 0.72f, 0.46f), ascension.skyGold());
+                finalSky = glm::mix(finalSky, glm::vec3(0.035f, 0.03f, 0.10f), ascension.skyNight());
+            }
+            glClearColor(finalSky.r, finalSky.g, finalSky.b, 1.0f);
+
+            // The dome over the clouds: violet-blue overhead, rose at the
+            // horizon, gold toward the sun - then night.
+            const float g = ascension.skyGold(), n = ascension.skyNight();
+            skyZenith  = glm::mix(glm::mix(sky, glm::vec3(0.34f, 0.33f, 0.66f), g), glm::vec3(0.025f, 0.025f, 0.08f), n);
+            skyHorizon = glm::mix(glm::mix(sky, glm::vec3(0.98f, 0.62f, 0.64f), g), glm::vec3(0.07f, 0.06f, 0.16f), n);
+            skyGlow    = glm::mix(glm::mix(sky, glm::vec3(1.0f, 0.80f, 0.45f), g), glm::vec3(0.07f, 0.06f, 0.16f), n);
+        }
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         const float aspect = static_cast<float>(gWindowWidth) /
@@ -2163,7 +2505,10 @@ int main()
         shader.setMat4("uView", gCamera.view());
         shader.setMat4("uProjection", gCamera.projection(aspect));
         shader.setVec3("uViewPos", gCamera.position());
-        shader.setVec3("uAmbient", scene.ambient);
+        // Daylight fills the shadows in.
+        shader.setVec3("uAmbient", glm::mix(glm::mix(scene.ambient, glm::vec3(0.42f, 0.38f, 0.34f),
+                                                     Easing::smoothstep01(scene.dawn)),
+                                            glm::vec3(0.12f, 0.12f, 0.20f), ascension.skyNight()));
         shader.setInt("uDebugNormals", debugNormals ? 1 : 0);
         shader.setInt("uUseTextures", useTextures ? 1 : 0);
         shader.setInt("uUseNormalMaps", useNormalMaps ? 1 : 0);
@@ -2172,7 +2517,8 @@ int main()
         // shadow map. Bound once here; nothing else touches unit 2, so it
         // stays valid across every material's own binds.
         shader.setInt("uShadowsEnabled", shadowsOn ? 1 : 0);
-        shader.setInt("uShadowLightIndex", Scene::kShadowLightIndex);
+        // Not always 0: in the garden the casting torch is not in the list.
+        shader.setInt("uShadowLightIndex", scene.shadowLightIndex());
         shader.setInt("uShadowMap", 2);
         shader.setMat4("uLightSpaceMatrix", shadowMap.lightSpaceMatrix());
         if (shadowsOn)
@@ -2181,6 +2527,14 @@ int main()
         }
 
         uploadLights(shader, scene.lights);
+
+        shader.setVec3("uSkyZenith", skyZenith);
+        shader.setVec3("uSkyHorizon", skyHorizon);
+        shader.setVec3("uSkyGlow", skyGlow);
+        shader.setVec3("uSkySunDir", glm::normalize(ascension.skySunPosition() - gCamera.position()));
+        shader.setVec3("uRtSky", skyHorizon);
+        shader.setFloat("uRtTime", now);
+        scene.placeSkyDome(gCamera.position());
 
         scene.draw(shader, gCamera.position());
 
@@ -2235,10 +2589,17 @@ int main()
                 info.gazeLive    = gaze.beamLive();
             }
 
-            hud.draw(info, gWindowWidth, gWindowHeight);
+            if (!ascension.active())     // the finale plays without it
+            {
+                hud.draw(info, gWindowWidth, gWindowHeight);
+            }
         }
 
 #ifdef TRIAL_AUTOPLAY
+        // TRIAL_RT_OFF captures the same run without ray tracing, to compare.
+        static bool rtChecked = false;
+        if (!rtChecked) { rtChecked = true; if (std::getenv("TRIAL_RT_OFF")) { scene.rayTracing = false; } }
+
         // Set TRIAL_SHOT_DIR to have the self-playing build save frames at
         // fixed moments of the first run.
         if (const char* shotDir = std::getenv("TRIAL_SHOT_DIR"))
@@ -2248,11 +2609,11 @@ int main()
                 { TrialState::Placing,   0.5f, "a_chamber" },
                 { TrialState::Balanced,  1.9f, "a_djinn1_rise" },
                 { TrialState::Balanced,  2.6f, "a_djinn2_rise" },
-                { TrialState::Balanced,  3.6f, "a_djinn3_formed" },
-                { TrialState::Balanced,  4.3f, "a_djinn4_charm" },
-                { TrialState::TreasureRevealed, 1.6f, "a_djinn5_point" },
-                { TrialState::TreasureRevealed, 3.0f, "a_djinn6_point" },
-                { TrialState::TreasureRevealed, 4.1f, "a_djinn7_gone" },
+                { TrialState::Balanced,  2.9f, "a_djinn3_formed" },
+                { TrialState::Balanced,  3.65f, "a_djinn4_hand" },
+                { TrialState::Balanced,  4.4f, "a_djinn5_charm" },
+                { TrialState::Balanced,  5.0f, "a_djinn6_charm" },
+                { TrialState::TreasureRevealed, 1.6f, "a_djinn7_point" },
                 { TrialState::Sanctuary, 7.0f, "b_puzzle" },
                 { TrialState::Garden,    0.3f, "c_open0" },
                 { TrialState::Garden,    1.3f, "c_open1" },
@@ -2270,6 +2631,14 @@ int main()
                 { TrialState::Garden,   14.0f, "f_wave4" },
                 { TrialState::Garden,   17.5f, "f_wave5" },
                 { TrialState::Garden,   20.0f, "f_wave6" },
+                { TrialState::Garden,   18.0f, "g_dawn0" },
+                { TrialState::Garden,   20.5f, "g_dawn1" },
+                { TrialState::Garden,   22.5f, "g_dawn2" },
+                { TrialState::Garden,   24.5f, "g_dawn3" },
+                { TrialState::Garden,   27.5f, "g_dawn4" },
+                { TrialState::Garden,   26.5f, "r_pool0" },
+                { TrialState::Garden,   28.5f, "r_pool1" },
+                { TrialState::Garden,   30.5f, "r_pool2" },
             };
             static bool taken[sizeof(moments) / sizeof(moments[0])] = {};
             for (std::size_t i = 0; i < sizeof(moments) / sizeof(moments[0]); ++i)
@@ -2281,6 +2650,37 @@ int main()
                     saveFrameBmp(std::string(shotDir) + "/" + moments[i].name + ".bmp",
                                  gWindowWidth, gWindowHeight);
                     printf("[shot] %s\n", moments[i].name);
+                }
+            }
+
+            // The sun's ray, by its own clock.
+            static const float beamAt[] = { 0.55f, 1.1f, 1.45f, 1.8f, 2.3f };
+            static bool beamTaken[sizeof(beamAt) / sizeof(beamAt[0])] = {};
+            for (std::size_t i = 0; i < sizeof(beamAt) / sizeof(beamAt[0]); ++i)
+            {
+                if (!beamTaken[i] && sunBeam >= beamAt[i])
+                {
+                    beamTaken[i] = true;
+                    char name[32];
+                    std::snprintf(name, sizeof name, "g_beam%d_%03.2f", static_cast<int>(i), beamAt[i]);
+                    saveFrameBmp(std::string(shotDir) + "/" + name + ".bmp", gWindowWidth, gWindowHeight);
+                    printf("[shot] %s\n", name);
+                }
+            }
+
+            // The ascension, by its own clock.
+            static const float ascendAt[] = { 1.5f, 3.5f, 6.5f, 9.5f, 13.4f, 16.0f, 20.0f, 24.5f,
+                                               28.0f, 31.0f, 34.0f, 37.0f, 40.0f, 43.5f };
+            static bool ascendTaken[sizeof(ascendAt) / sizeof(ascendAt[0])] = {};
+            for (std::size_t i = 0; i < sizeof(ascendAt) / sizeof(ascendAt[0]); ++i)
+            {
+                if (!ascendTaken[i] && ascension.active() && ascension.time() >= ascendAt[i])
+                {
+                    ascendTaken[i] = true;
+                    char name[32];
+                    std::snprintf(name, sizeof name, "h_asc%02d_%04.1f", static_cast<int>(i), ascendAt[i]);
+                    saveFrameBmp(std::string(shotDir) + "/" + name + ".bmp", gWindowWidth, gWindowHeight);
+                    printf("[shot] %s\n", name);
                 }
             }
         }

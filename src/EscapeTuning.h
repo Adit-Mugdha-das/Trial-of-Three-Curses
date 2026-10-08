@@ -54,7 +54,11 @@ namespace Tuning
     constexpr float kOfferFlight  = 1.3f;    // the jewel floating onto the ankh
     constexpr float kWaveTime     = 6.5f;    // the circle of life crossing the garden
     constexpr float kWaveRadius   = 15.0f;   // big enough to reach every corner
-    constexpr float kGardenLinger = 10.0f;   // the souls rising; then a new traveller (R sooner)
+    constexpr float kGardenLinger = 15.0f;   // souls rising, then dawn; then a new traveller (R sooner)
+
+    // --- dawn ------------------------------------------------------------------
+    constexpr float kDawnStart = 8.5f;   // seconds after the jewel lands (souls mostly up)
+    constexpr float kDawnTime  = 8.0f;   // night -> sunrise -> morning
 
     // --- the souls ---------------------------------------------------------------
     constexpr float kSoulGlowTime    = 1.0f;   // a statue glowing gold from within

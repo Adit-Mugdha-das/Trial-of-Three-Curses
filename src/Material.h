@@ -53,6 +53,14 @@ struct Material
     // shader picks between them per pixel by distance from the wave of life:
     // dead outside it, alive behind it, a gold glow along its edge.
     bool      living = false;
+
+    // The sky dome: coloured by view direction (a gradient with a sun glow),
+    // not lit. Never casts a shadow.
+    bool      sky = false;
+
+    // Ray-traced reflections (the garden pool): each pixel fires a ray into
+    // the scene's boxes and ellipsoids and shows what it hits.
+    bool      rayTraced = false;
     glm::vec3 deadKa{ 0.0f };
     glm::vec3 deadKd{ 0.0f };
     glm::vec3 deadKs{ 0.0f };

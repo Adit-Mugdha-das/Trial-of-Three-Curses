@@ -13,7 +13,7 @@ The fireflies were the souls all along. Then the sun rises.
 | 1. The dead garden | Dry brown lawn, palm fronds hanging limp, bushes shrunk, closed grey flowers, a black still pool, closed lotus buds, withered ivy, dull relics, faint fireflies - and **7 stone statues** of past travellers frozen in different poses. | done |
 | 2. The wave of life | Walk up to the ankh: the treasure floats onto it and a glowing ring spreads across the ground. Behind it the colour returns: green grass, fronds lifting, flowers opening, the pool glowing. | done |
 | 3. The souls are freed | When the wave reaches a statue it glows gold, crumbles into light, and its soul rises as a firefly into the stars. | done |
-| 4. Dawn | The sky turns orange then blue, the moon fades, the sun rises over the back wall, and the camera pulls up for the final shot. | next |
+| 4. Dawn | The sky turns orange then blue, the moon fades, the sun rises over the back wall, and the camera pulls up for the final shot. | done |
 
 ## Part 1 - what was built
 
@@ -66,3 +66,79 @@ The fireflies were the souls all along. Then the sun rises.
   plinths and the palms at the souls rising into the night sky.
 - A new run puts every statue back, whole and grey.
 - The run now lingers 10 s after the wave so the souls can rise (R leaves sooner).
+
+## Part 4 - what was built
+
+- **Dawn** begins 8.5 s after the jewel lands (the souls mostly up) and takes 8 s.
+- **The sky** (the clear colour) goes night purple -> sunrise orange -> morning blue.
+- **The moon** sinks and fades; **the stars** go out; **clouds** fade in, lit pink-orange at
+  sunrise and white by morning, drifting.
+- **The sun** rises out of desert dunes on the horizon: an emissive sphere, deep orange
+  turning gold-white, with a soft halo drawn as two big additive glows (a sphere for the
+  halo had a hard edge). The garden's back wall was lowered to waist height so the garden
+  looks out over the dunes.
+- **The light warms:** the garden's cold moonlight becomes warm sunlight from the sun's
+  side, the directional fill turns warm and stronger, and the ambient rises to daylight.
+  The relic fireflies fade with the night.
+- **Final shot:** across the living garden - flowers, palms, pool - to the low wall, the
+  dunes and the sun rising over them. The run ends 15 s after the wave.
+- **Fixed on the way:** the shader was told light #0 casts the shadow map, but in the garden
+  the casting torch is skipped (Part 2), so another light was wrongly being shadowed. The
+  scene now reports which light casts, or none.
+
+## The whole ending, as built
+
+Dead garden and stone statues -> lay the jewel on the ankh -> a golden circle of life
+spreads; plants revive -> each statue glows, crumbles to gold dust, and its soul rises as a
+firefly into the stars -> dawn: the sun rises over the dunes on a garden come back to life.
+
+## The twist - the Ascension (built)
+
+He was a soul too. Half a second after dawn has fully come, the run plays a 44 s finale
+(`src/Ascension.h/.cpp`, GL-free, tested), then a new traveller begins. No controls; no HUD.
+
+1. **He turns to light (0-5 s):** the charm cracks in a cyan burst; gold climbs his body
+   from the feet (the petrify shader front, with a gold palette); he lifts off.
+2. **Over the temple, through the clouds (5-14.5 s):** his body fades into a bright orb;
+   the camera shows the whole temple from above, then he rises out of a sea of clouds
+   (a cloud floor plus 70 puffs at y 76-86) into a golden sky.
+3. **The river of souls (14.5-26 s):** a river of 150 lights flows to Ra's sun boat - a
+   gold hull with papyrus ends, a cabin, the sun disc and eight rowing oars - sailing toward
+   a sun above the clouds. He rides it.
+4. **He becomes a star (26-44 s):** night falls and stars come out. Constellations of his
+   journey are drawn one by one: the scale, the lamp, the three rings, Medusa's closed
+   eye. Last, a figure of himself appears, and he rises to become its heart star.
+
+Camera far plane is 900 during the finale, 200 otherwise.
+
+## Ray-traced pool reflections (built)
+
+The garden pool is a ray-traced mirror (`shaders/phong.frag`, `Scene::uploadRayTracing`).
+Each frame the scene sends the garden's visible shapes to the shader: up to 48 boxes and
+40 ellipsoids, each with its current colour (alive or dead, texture's mean colour). For
+every water pixel the shader:
+
+1. bends the normal with small moving ripples,
+2. fires a **reflection ray** and finds the nearest box/ellipsoid it hits (slab test,
+   ray-ellipsoid quadratic), or the sky if none,
+3. shades that hit with the garden light and a **shadow ray** toward the light,
+4. fires a second **shadow ray** from the water, so things standing between it and the
+   light shade the pool,
+5. mixes reflection over the water by a Fresnel term.
+
+**Z** toggles it (the window title shows "ray tracing ON/OFF"). After dawn the camera
+holds a low shot across the pool so the altar, the gold ankh and the orb are seen
+reflected, before the ascension begins.
+
+## The sun's ray off the pool (built)
+
+What sets the ascension off. About 6 s after dawn completes, a ray leaves the sun, strikes
+the pool and its reflection strikes his chest; a flash, and the gold begins to climb.
+
+- The spot on the water is found with the **mirror law** (angle in = angle out): the ray
+  aims at his mirror image under the surface; where that line crosses the water is the
+  spot. The reflected ray is `glm::reflect` of the incoming one about the water's normal.
+- Timing: sun -> water 1.0 s, water -> chest 0.6 s, the ascension begins 0.35 s after.
+- The ray is drawn as glows over everything (`ParticleSystem::addGlowOnTop`), so the low
+  wall and the altar never cut it into pieces. The risen sun sits a little higher (16)
+  so that the reflection point falls inside the pool.

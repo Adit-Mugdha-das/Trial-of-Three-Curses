@@ -4,6 +4,7 @@
 #include <string>
 
 #include <glad/glad.h>
+#include <glm/glm.hpp>
 
 // A 2D texture with mipmaps and repeat wrapping.
 //
@@ -32,6 +33,10 @@ public:
     GLuint id() const { return m_id; }
     bool valid() const { return m_id != 0; }
 
+    // The texture's mean colour: what a ray-traced reflection, which cannot
+    // sample it, multiplies the surface colour by instead.
+    glm::vec3 average() const { return m_average; }
+
     // A 1x1 white texture, created on first use. Bound to any sampler slot a
     // material leaves empty: some drivers misbehave when a sampler points at
     // a unit with nothing bound, even if the shader branches around the
@@ -42,6 +47,7 @@ private:
     GLuint m_id = 0;
     int m_width  = 0;
     int m_height = 0;
+    glm::vec3 m_average{ 1.0f };
 
     void release();
 };

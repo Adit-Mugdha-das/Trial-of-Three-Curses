@@ -15,6 +15,7 @@ Texture::Texture(Texture&& other) noexcept
     : m_id(other.m_id)
     , m_width(other.m_width)
     , m_height(other.m_height)
+    , m_average(other.m_average)
 {
     other.m_id = 0;
     other.m_width = 0;
@@ -30,6 +31,7 @@ Texture& Texture::operator=(Texture&& other) noexcept
         m_id     = other.m_id;
         m_width  = other.m_width;
         m_height = other.m_height;
+        m_average = other.m_average;
 
         other.m_id = 0;
         other.m_width = 0;
@@ -56,6 +58,27 @@ void Texture::createFromPixels(int width, int height, int channels,
 
     m_width  = width;
     m_height = height;
+
+    // The mean colour, for ray tracing.
+    if (channels >= 3 && width > 0 && height > 0)
+    {
+        double sum[3] = { 0.0, 0.0, 0.0 };
+        const long count = static_cast<long>(width) * height;
+        for (long i = 0; i < count; ++i)
+        {
+            for (int c = 0; c < 3; ++c) { sum[c] += pixels[i * channels + c]; }
+        }
+        m_average = glm::vec3(static_cast<float>(sum[0] / (255.0 * count)),
+                              static_cast<float>(sum[1] / (255.0 * count)),
+                              static_cast<float>(sum[2] / (255.0 * count)));
+    }
+    else if (channels == 1 && width > 0 && height > 0)
+    {
+        double sum = 0.0;
+        const long count = static_cast<long>(width) * height;
+        for (long i = 0; i < count; ++i) { sum += pixels[i]; }
+        m_average = glm::vec3(static_cast<float>(sum / (255.0 * count)));
+    }
 
     GLenum format = GL_RGB;
     if (channels == 1) { format = GL_RED; }

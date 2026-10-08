@@ -8,6 +8,7 @@
 #include "Mesh.h"
 #include "SceneNode.h"
 #include "Collapse.h"
+#include "Ascension.h"
 #include "Shader.h"
 #include "Texture.h"
 #include "TrialState.h"
@@ -114,6 +115,38 @@ public:
     float     offeringFlight = -1.0f;
     glm::vec3 offeringFrom{ 0.0f };
     glm::vec3 offeringPosition() const;
+
+    // --- dawn ---------------------------------------------------------------------
+    // 0 night, 1 morning. Moves the sun, fades the moon and stars, colours the
+    // clouds, and warms and brightens the garden's light. Main sets it, and
+    // also colours the sky (the clear colour) and the ambient from it.
+    float dawn = 0.0f;
+
+    // Which entry of `lights` casts the shadow map this frame (the chamber's
+    // left torch), or -1 if it is not there - in the garden it is skipped.
+    int shadowLightIndex() const { return m_shadowLight; }
+
+    // Where the sun is, for the soft halo main draws round it.
+    glm::vec3 sunPosition() const;
+
+    // --- the ascension -------------------------------------------------------------
+    // Reads the boat, clouds, sky sun and his glow from the timeline.
+    void applyAscension(const Ascension& ascension);
+    bool charmShattered = false;    // the charm cracks into light as he ascends
+    void placeSkyDome(const glm::vec3& eye);   // keeps the sky dome round the camera
+
+    // --- ray tracing -------------------------------------------------------------
+    // The garden pool's reflections are ray traced in the shader against the
+    // garden's own shapes, sent up each frame. Z toggles it.
+    bool rayTracing = true;
+    int  rayTracedBoxes() const { return m_rtBoxes; }
+    int  rayTracedBlobs() const { return m_rtBlobs; }
+    glm::vec3 poolCentre() const { return m_poolCentre; }
+    static constexpr float kPoolRadius = 2.35f;
+    static constexpr float kWaterLevel = 0.07f;
+    std::vector<glm::vec3> boatLamps() const;  // for the glow round each lamp
+    std::vector<glm::vec3> oarBlades() const;  // for the sparkles dripping off them
+    std::vector<glm::vec3> baBirds() const;    // where each soul-bird is, for its glow
 
     // --- the souls ---------------------------------------------------------------
     // Each statue, once the wave reaches it, glows, crumbles and frees a soul
@@ -386,6 +419,49 @@ private:
     SceneNode* m_gateRoot = nullptr;           // sinks into the floor to open
     std::vector<SceneNode*> m_relicSpinners;   // relics that turn slowly
     float m_relicSpin = 0.0f;
+    int   m_shadowLight = -1;
+
+    // The ascension: his gold glow and fading body, the cloud sea, Ra's boat
+    // and its oars, the sun above the clouds, and night falling.
+    float m_ascendGlow = 0.0f;
+    float m_ascendFade = 0.0f;
+    float m_ascendNight = 0.0f;
+    float m_boatLevel = 0.0f;
+    std::vector<SceneNode*> m_cloudSea;
+    SceneNode* m_cloudFloor = nullptr;
+    std::vector<float> m_cloudShade;    // 0 = a cloud's shadowed base, 1 = its sunlit top
+    SceneNode* m_skyDome = nullptr;
+
+    SceneNode* m_gardenRoot = nullptr;
+    SceneNode* m_poolWater = nullptr;
+    glm::vec3  m_poolCentre{ 0.0f };
+    mutable int m_rtBoxes = 0;
+    mutable int m_rtBlobs = 0;
+    void uploadRayTracing(const Shader& shader) const;
+    std::vector<SceneNode*> m_boatLampNodes;
+    std::vector<SceneNode*> m_oarBlades;
+
+    // The Ba birds: golden soul-birds with human heads, flying beside the boat.
+    struct BaBird
+    {
+        SceneNode* root = nullptr;
+        SceneNode* leftWing = nullptr;
+        SceneNode* rightWing = nullptr;
+        glm::vec3  offset{ 0.0f };    // from the boat
+        float      phase = 0.0f;
+    };
+    std::vector<BaBird> m_baBirds;
+    std::vector<SceneNode*> m_oars;
+    SceneNode* m_boat = nullptr;
+    SceneNode* m_skySun = nullptr;
+    void buildAscension();
+
+    // The sky over the garden.
+    SceneNode* m_moon = nullptr;
+    SceneNode* m_sun = nullptr;
+    std::vector<SceneNode*> m_stars;
+    std::vector<float>      m_starBrightness;
+    std::vector<SceneNode*> m_clouds;
     SceneNode* m_offering = nullptr;   // the jewel laid on the altar
     float m_offeringSpin = 0.0f;
 

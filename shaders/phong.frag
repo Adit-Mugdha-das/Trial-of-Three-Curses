@@ -50,6 +50,9 @@ struct Material
     vec3  deadKd;
     vec3  deadKs;
     vec3  deadEmissive;
+
+    int   sky;        // the sky dome: a gradient by view direction
+    int   rayTraced;  // the garden pool: ray-traced reflections
 };
 
 in vec3 vWorldPos;
@@ -69,6 +72,129 @@ uniform float uLifeRadius;
 
 uniform vec3 uAmbient;     // global ambient, modulated by the material's ka
 uniform vec3 uViewPos;
+
+// The sky dome over the clouds: violet-blue overhead, rose at the horizon,
+// gold toward the sun. Already in display colours - no lighting, no tone map.
+uniform vec3 uSkyZenith;
+uniform vec3 uSkyHorizon;
+uniform vec3 uSkyGlow;
+uniform vec3 uSkySunDir;
+
+// --- ray tracing ----------------------------------------------------------------
+// The garden pool reflects by real ray tracing: every water pixel fires a
+// reflection ray against the garden itself - its walls, obelisks, statues,
+// palms, dunes, the moon and the sun - sent up each frame as axis-aligned
+// boxes and ellipsoids. The nearest hit is shaded with its own shadow ray.
+// A second shadow ray from the water lets the obelisks' shadows fall on it.
+#define RT_MAX_BOXES 48
+#define RT_MAX_BLOBS 40
+uniform int   uRtEnabled;
+uniform float uRtTime;
+uniform int   uRtBoxCount;
+uniform vec3  uRtBoxMin[RT_MAX_BOXES];
+uniform vec3  uRtBoxMax[RT_MAX_BOXES];
+uniform vec3  uRtBoxKd[RT_MAX_BOXES];
+uniform int   uRtBlobCount;
+uniform vec3  uRtBlobCentre[RT_MAX_BLOBS];
+uniform vec3  uRtBlobRadii[RT_MAX_BLOBS];
+uniform vec3  uRtBlobKd[RT_MAX_BLOBS];
+uniform vec3  uRtBlobGlow[RT_MAX_BLOBS];
+uniform vec3  uRtLightPos;
+uniform vec3  uRtLightColor;
+uniform vec3  uRtSky;            // the sky's display colour, for rays that hit nothing
+
+// Ray against an axis-aligned box (the slab method). Rays starting inside are ignored.
+bool rtBox(vec3 o, vec3 d, vec3 bmin, vec3 bmax, out float t, out vec3 n)
+{
+    vec3 safe = mix(d, vec3(1e-6), lessThan(abs(d), vec3(1e-6)));
+    vec3 inv = 1.0 / safe;
+    vec3 t0 = (bmin - o) * inv;
+    vec3 t1 = (bmax - o) * inv;
+    vec3 tmin = min(t0, t1);
+    vec3 tmax = max(t0, t1);
+    float tn = max(max(tmin.x, tmin.y), tmin.z);
+    float tf = min(min(tmax.x, tmax.y), tmax.z);
+    if (tf < 0.0 || tn > tf || tn < 0.001) { t = 0.0; n = vec3(0.0); return false; }
+    t = tn;
+    if (tn == tmin.x)      { n = vec3(-sign(d.x), 0.0, 0.0); }
+    else if (tn == tmin.y) { n = vec3(0.0, -sign(d.y), 0.0); }
+    else                   { n = vec3(0.0, 0.0, -sign(d.z)); }
+    return true;
+}
+
+// Ray against an axis-aligned ellipsoid: squash space so it is a unit sphere.
+bool rtBlob(vec3 o, vec3 d, vec3 c, vec3 r, out float t, out vec3 n)
+{
+    vec3 oc = (o - c) / r;
+    vec3 dd = d / r;
+    float a = dot(dd, dd);
+    float b = dot(oc, dd);
+    float cc = dot(oc, oc) - 1.0;
+    float disc = b * b - a * cc;
+    t = 0.0; n = vec3(0.0);
+    if (disc < 0.0) { return false; }
+    float tt = (-b - sqrt(disc)) / a;
+    if (tt < 0.001) { return false; }
+    t = tt;
+    n = normalize((o + d * tt - c) / (r * r));
+    return true;
+}
+
+// The nearest thing a ray hits. Shadow rays skip glowing things (the moon
+// and the sun are lights, not blockers).
+bool rtHit(vec3 o, vec3 d, float maxT, bool shadowRay,
+           out float tBest, out vec3 nBest, out vec3 kd, out vec3 glow)
+{
+    tBest = maxT; nBest = vec3(0.0, 1.0, 0.0); kd = vec3(0.0); glow = vec3(0.0);
+    bool hit = false;
+    float t; vec3 n;
+    for (int i = 0; i < RT_MAX_BOXES; ++i)
+    {
+        if (i >= uRtBoxCount) { break; }
+        if (rtBox(o, d, uRtBoxMin[i], uRtBoxMax[i], t, n) && t < tBest)
+        {
+            tBest = t; nBest = n; kd = uRtBoxKd[i]; glow = vec3(0.0); hit = true;
+            if (shadowRay) { return true; }
+        }
+    }
+    for (int i = 0; i < RT_MAX_BLOBS; ++i)
+    {
+        if (i >= uRtBlobCount) { break; }
+        if (shadowRay && dot(uRtBlobGlow[i], vec3(1.0)) > 0.6) { continue; }
+        if (rtBlob(o, d, uRtBlobCentre[i], uRtBlobRadii[i], t, n) && t < tBest)
+        {
+            tBest = t; nBest = n; kd = uRtBlobKd[i]; glow = uRtBlobGlow[i]; hit = true;
+            if (shadowRay) { return true; }
+        }
+    }
+    return hit;
+}
+
+// From the display colour back to the linear light the tone map expects.
+vec3 rtLinear(vec3 c)
+{
+    vec3 x = pow(clamp(c, 0.0, 0.95), vec3(1.6));
+    return x / (vec3(1.0) - x);
+}
+
+// What a reflection ray sees: the lit, shadow-tested surface it hits, or the sky.
+vec3 rtTrace(vec3 o, vec3 d)
+{
+    float t; vec3 n, kd, glow;
+    if (!rtHit(o, d, 1.0e4, false, t, n, kd, glow))
+    {
+        return rtLinear(uRtSky * mix(1.15, 0.85, clamp(d.y, 0.0, 1.0)));
+    }
+    vec3  p = o + d * t;
+    vec3  toLight = uRtLightPos - p;
+    float dist = length(toLight);
+    vec3  L = toLight / dist;
+    float lit = max(dot(n, L), 0.0);
+    float ts; vec3 ns, ks, gs;
+    if (lit > 0.0 && rtHit(p + n * 0.02, L, dist, true, ts, ns, ks, gs)) { lit = 0.0; }
+    // A little sky light as well, so the shaded side is not black.
+    return kd * (uAmbient + vec3(0.18) + uRtLightColor * lit) + glow;
+}
 uniform int  uDebugNormals;
 uniform int  uUseTextures;    // global off switch, for the T-less comparison
 uniform int  uUseNormalMaps;  // separate switch, to isolate the relief
@@ -88,6 +214,8 @@ uniform vec3  uStoneKa;
 uniform vec3  uStoneKd;
 uniform vec3  uStoneKs;
 uniform float uStoneShininess;
+uniform vec3  uStoneEmissive;    // glow inside the converted part (gold, when he ascends)
+uniform vec3  uPetrifyEdge;      // glow riding the front itself
 
 // --- shadow mapping ------------------------------------------------------
 uniform sampler2D uShadowMap;
@@ -195,6 +323,17 @@ vec3 shade(Light light, vec3 N, vec3 V, vec3 kd, vec3 ks, float shininess,
 
 void main()
 {
+    if (uMaterial.sky == 1)
+    {
+        vec3  dir = normalize(vWorldPos - uViewPos);
+        float toSun = max(dot(dir, uSkySunDir), 0.0);
+        vec3  horizon = mix(uSkyHorizon, uSkyGlow, pow(toSun, 3.0));
+        vec3  col = mix(horizon, uSkyZenith, smoothstep(0.0, 0.6, dir.y));
+        col += uSkyGlow * pow(toSun, 24.0) * 0.35;
+        FragColor = vec4(col, 1.0);
+        return;
+    }
+
     vec3 N = normalize(vNormal);
 
     // Tiling happens here rather than in the mesh UVs, so one unit cube can
@@ -293,7 +432,7 @@ void main()
         // A faint green glow riding the leading edge, so the front itself is
         // visible as it climbs. Peaks mid-transition and vanishes either side.
         float edge = stone * (1.0 - stone) * 4.0;
-        emissive += vec3(0.10, 0.32, 0.12) * edge;
+        emissive += uPetrifyEdge * edge + uStoneEmissive * stone;
     }
 
     // Ambient is applied once, not per light, so adding lights does not wash
@@ -306,6 +445,30 @@ void main()
         result += shade(uLights[i], N, V, kd, ks, shininess, casts);
     }
 
+    float alpha = uMaterial.opacity;
+    if (uMaterial.rayTraced == 1 && uRtEnabled == 1)
+    {
+        // Gentle moving ripples bend each pixel's mirror a little.
+        vec3 P = vWorldPos;
+        vec3 Nw = normalize(vec3(
+            0.012 * sin(P.x * 5.0 + uRtTime * 1.7) + 0.008 * sin((P.x + P.z) * 7.0 - uRtTime * 2.3),
+            1.0,
+            0.012 * cos(P.z * 5.5 + uRtTime * 1.4) + 0.008 * cos((P.x - P.z) * 6.0 + uRtTime * 2.0)));
+        vec3 Vw = normalize(uViewPos - P);
+        vec3 reflection = rtTrace(P + Nw * 0.02, reflect(-Vw, Nw));
+
+        // Shadow ray from the water itself: what stands between it and the light.
+        vec3 toLight = uRtLightPos - P;
+        float ts; vec3 ns, ks, gs;
+        float shade = rtHit(P + vec3(0.0, 0.02, 0.0), normalize(toLight), length(toLight), true, ts, ns, ks, gs)
+                    ? 0.5 : 1.0;
+
+        // Fresnel: a mirror at a glancing look, clearer looking straight down.
+        float fresnel = 0.45 + 0.55 * pow(1.0 - max(dot(Nw, Vw), 0.0), 3.0);
+        result = mix(result * shade, reflection * shade, fresnel);
+        alpha = 0.97;
+    }
+
     // Reinhard-style rolloff, so the bright torch cores clip gracefully to
     // white instead of banding.
     result = result / (result + vec3(1.0));
@@ -313,5 +476,5 @@ void main()
     // Back to display space.
     result = pow(result, vec3(1.0 / 1.6));
 
-    FragColor = vec4(result, uMaterial.opacity);
+    FragColor = vec4(result, alpha);
 }

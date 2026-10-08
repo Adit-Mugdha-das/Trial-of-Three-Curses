@@ -1,5 +1,7 @@
 #include "SceneNode.h"
 
+#include <glad/glad.h>
+
 #include <utility>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -82,6 +84,15 @@ void SceneNode::drawSelf(const Shader& shader) const
     shader.setInt("uPetrifyEnabled", petrifies ? 1 : 0);
 
     material.upload(shader);
+    if (material.sky)
+    {
+        // The sky dome is seen from inside: draw both faces.
+        const GLboolean culling = glIsEnabled(GL_CULL_FACE);
+        glDisable(GL_CULL_FACE);
+        mesh->draw();
+        if (culling) { glEnable(GL_CULL_FACE); }
+        return;
+    }
     mesh->draw();
 }
 
@@ -112,7 +123,7 @@ void SceneNode::drawDepth(const Shader& shader) const
 
     // Transparent nodes are skipped: the energy rings are light itself and
     // must not cast a solid silhouette across the chamber.
-    if (mesh != nullptr && !material.isTransparent())
+    if (mesh != nullptr && !material.isTransparent() && !material.sky)
     {
         shader.setMat4("uModel", m_world);
         mesh->draw();

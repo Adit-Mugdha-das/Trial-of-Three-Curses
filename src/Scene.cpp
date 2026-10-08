@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <random>
+#include <string>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -162,6 +164,7 @@ void Scene::build()
     buildGate();
     buildSanctuary();
     buildGarden();
+    buildAscension();
     buildCeilingWork();
 
     m_root->updateWorld();
@@ -1417,6 +1420,50 @@ void Scene::update(float time, float deltaTime)
         m_gateRoot->position.y = -7.4f * Easing::smoothstep01(gardenOpen);
         m_gateRoot->visible = gardenOpen < 0.999f;
     }
+    // --- dawn ---------------------------------------------------------------------
+    if (m_sun != nullptr)
+    {
+        const float d = Easing::clamp01(dawn);
+        const float rise = Easing::smoothstep01(d);
+
+        // The sun climbs over the back wall, deep orange turning to gold.
+        m_sun->position = sunPosition();
+        m_sun->visible  = d > 0.01f;
+        // Strong enough to stay bright through the tone mapping, which
+        // turned a weaker one into a pale grey disc.
+        m_sun->material.emissive = glm::mix(glm::vec3(1.0f, 0.45f, 0.15f) * 3.0f,
+                                            glm::vec3(1.0f, 0.90f, 0.65f) * 3.5f, d);
+
+        // The moon sinks and fades; the stars go out.
+        if (m_moon != nullptr)
+        {
+            m_moon->position.y = 32.0f - 14.0f * rise;
+            m_moon->material.emissive = glm::vec3(0.85f, 0.88f, 0.95f) * (1.0f - rise);
+            m_moon->visible = rise < 0.98f;
+        }
+        const float starsLeft = 1.0f - Easing::smoothstep01(d * 1.6f);
+        for (std::size_t i = 0; i < m_stars.size(); ++i)
+        {
+            m_stars[i]->material.emissive = glm::vec3(m_starBrightness[i] * starsLeft);
+            m_stars[i]->visible = starsLeft > 0.01f;
+        }
+
+        // Clouds: barely there at night, lit pink-orange from below at
+        // sunrise, white by morning.
+        const glm::vec3 night(0.07f, 0.05f, 0.10f), sunrise(1.0f, 0.55f, 0.45f), day(0.92f, 0.94f, 0.98f);
+        const glm::vec3 cloudColour = (d < 0.5f)
+            ? glm::mix(night, sunrise, Easing::smoothstep01(d / 0.5f))
+            : glm::mix(sunrise, day, Easing::smoothstep01((d - 0.5f) / 0.5f));
+        for (std::size_t i = 0; i < m_clouds.size(); ++i)
+        {
+            m_clouds[i]->material.emissive = cloudColour * 0.8f;
+            m_clouds[i]->material.opacity  = 0.85f * Easing::smoothstep01(d * 2.0f);
+            m_clouds[i]->visible = d > 0.01f;
+            m_clouds[i]->position.x += deltaTime * 0.4f;     // drifting
+            if (m_clouds[i]->position.x > 30.0f) { m_clouds[i]->position.x -= 60.0f; }
+        }
+    }
+
     // --- the statues: glow, crumble into light, free a soul -------------------
     for (std::size_t i = 0; i < m_statues.size(); ++i)
     {
@@ -1510,7 +1557,10 @@ void Scene::update(float time, float deltaTime)
         if (part == nullptr) { continue; }
         // Back to exactly opaque when it is over, so he returns to the
         // opaque pass and casts his shadow again.
-        part->material.opacity = (m_ghost < 0.01f) ? 1.0f : 1.0f - 0.7f * m_ghost;
+        part->material.opacity = ((m_ghost < 0.01f) ? 1.0f : 1.0f - 0.7f * m_ghost)
+                               * (1.0f - m_ascendFade);
+        if (m_ascendFade >= 1.0f) { part->material.opacity = 1.0f; }
+        part->visible = m_ascendFade < 0.999f;
     }
 
     // --- the gate's rings --------------------------------------------------------
@@ -1617,7 +1667,8 @@ void Scene::update(float time, float deltaTime)
 
         // Hidden in first person: it would sweep past the lens.
         const bool firstPerson = (travellerHead != nullptr && !travellerHead->visible);
-        charm->visible = m_charmFlight > 0.001f && m_charmScale > 0.01f && !firstPerson;
+        charm->visible = m_charmFlight > 0.001f && m_charmScale > 0.01f && !firstPerson
+                      && !charmShattered;
 
         if (charmGem != nullptr)
         {
@@ -1688,6 +1739,8 @@ void Scene::updateLights(float time)
 
     // --- two warm torch point lights ---------------------------------------
     // Anchored to the flame nodes, so they inherit any movement for free.
+    m_shadowLight = -1;
+
     // In the garden the chamber's and corridor's torches are far behind him
     // and light nothing he can see: the budget goes to the garden instead.
     const bool inGarden = traveller != nullptr
@@ -1704,6 +1757,10 @@ void Scene::updateLights(float time)
 
         const float power = torchPower[chamberTorchId];
         if (power < 0.02f) { continue; }
+
+        // The left torch casts the shadow map; remember where it lands in
+        // the list, rather than assuming it is first.
+        if (chamberTorchId == 0) { m_shadowLight = static_cast<int>(lights.size()); }
 
         Light torchLight;
         torchLight.type      = LightType::Point;
@@ -1772,6 +1829,20 @@ void Scene::updateLights(float time)
             lights.push_back(soul);
             ++lit;
         }
+    }
+
+    // --- Ra's boat: a warm light over the clouds -----------------------------
+    if (m_boat != nullptr && m_boatLevel > 0.01f && static_cast<int>(lights.size()) < kMaxLights)
+    {
+        Light boat;
+        boat.type      = LightType::Point;
+        boat.position  = m_boat->position + glm::vec3(0.0f, 4.0f, 0.0f);
+        boat.color     = { 1.0f, 0.82f, 0.5f };
+        boat.intensity = 3.5f * m_boatLevel;
+        boat.constant  = 1.0f;
+        boat.linear    = 0.05f;
+        boat.quadratic = 0.008f;
+        lights.push_back(boat);
     }
 
     // --- the offering on the altar: the garden's warm heart -------------------
@@ -1985,11 +2056,13 @@ void Scene::updateLights(float time)
         // the relics, cool, reaching every wall.
         if (gardenOpen > 0.01f)
         {
-            exitLight.position  = { 0.0f, 8.0f, 82.0f };
-            exitLight.color     = { 0.72f, 0.82f, 1.0f };
-            exitLight.intensity = 2.5f + 3.5f * Easing::smoothstep01(gardenOpen);
-            exitLight.linear    = 0.04f;
-            exitLight.quadratic = 0.004f;
+            // ...turning to warm sunlight from the sun's side at dawn.
+            const float d = Easing::smoothstep01(dawn);
+            exitLight.position  = glm::mix(glm::vec3(0.0f, 8.0f, 82.0f), glm::vec3(4.0f, 14.0f, 94.0f), d);
+            exitLight.color     = glm::mix(glm::vec3(0.72f, 0.82f, 1.0f), glm::vec3(1.0f, 0.84f, 0.60f), d);
+            exitLight.intensity = (2.5f + 3.5f * Easing::smoothstep01(gardenOpen)) * (1.0f + 0.8f * d);
+            exitLight.linear    = glm::mix(0.04f, 0.02f, d);
+            exitLight.quadratic = glm::mix(0.004f, 0.0015f, d);
         }
         exitLight.constant  = 1.0f;
         exitLight.linear    = 0.05f;
@@ -2004,11 +2077,25 @@ void Scene::updateLights(float time)
     fill.direction = { -0.3f, -1.0f, -0.45f };
     fill.color     = { 0.30f, 0.36f, 0.62f };
     fill.intensity = 0.22f;
+    if (dawn > 0.0f)
+    {
+        // Morning: warm, stronger, coming from the sun behind the back wall.
+        const float d = Easing::smoothstep01(dawn);
+        fill.color     = glm::mix(fill.color, glm::vec3(1.0f, 0.84f, 0.64f), d);
+        fill.intensity = 0.22f + 0.45f * d;
+        fill.direction = glm::normalize(glm::mix(fill.direction, glm::vec3(-0.15f, -0.5f, -1.0f), d));
+    }
+    if (m_ascendNight > 0.0f)
+    {
+        // Night over the clouds: a cool, dim moonlit fill for the stars.
+        fill.color     = glm::mix(fill.color, glm::vec3(0.30f, 0.36f, 0.70f), m_ascendNight);
+        fill.intensity *= 1.0f - 0.6f * m_ascendNight;
+    }
     lights.push_back(fill);
 
     // --- the charm protecting him ----------------------------------------------
     // A small cold glow that travels with him down the dark corridor.
-    if (charm != nullptr && m_charmFlight > 0.01f && m_charmScale > 0.01f
+    if (charm != nullptr && m_charmFlight > 0.01f && m_charmScale > 0.01f && !charmShattered
         && static_cast<int>(lights.size()) < kMaxLights)
     {
         Light glow;
@@ -2173,6 +2260,7 @@ void Scene::buildGarden()
     // wave of life passes each pixel, and its shape - fronds lifting, flowers
     // opening - is swapped per node through m_living.
     SceneNode* garden = m_root->createChild("HiddenGarden");
+    m_gardenRoot = garden;
 
     const float front = Tuning::kGardenFrontZ;
     const float back  = Tuning::kGardenBackZ;
@@ -2242,6 +2330,7 @@ void Scene::buildGarden()
     waterAlive.opacity = 0.75f;
     Material water = living(waterAlive, { 0.05f, 0.06f, 0.07f });
     water.deadKs = { 0.3f, 0.3f, 0.3f };          // still water still shines
+    water.rayTraced = true;                       // a ray-traced mirror
 
     Material relicGoldAlive = kGold;
     relicGoldAlive.emissive = { 0.35f, 0.26f, 0.08f };
@@ -2266,7 +2355,24 @@ void Scene::buildGarden()
 
     add(garden, "WallL", &m_cube, { -(half + 0.3f), 3.0f, midZ }, { 0.6f, 6.0f, depth + 0.6f }, wallMat);
     add(garden, "WallR", &m_cube, {  (half + 0.3f), 3.0f, midZ }, { 0.6f, 6.0f, depth + 0.6f }, wallMat);
-    add(garden, "WallBack", &m_cube, { 0.0f, 3.0f, back + 0.3f }, { 2.0f * half + 1.2f, 6.0f, 0.6f }, wallMat);
+    // The back wall is low, so the garden looks out over the desert to the
+    // horizon - where the sun will rise.
+    add(garden, "WallBack", &m_cube, { 0.0f, 1.2f, back + 0.3f }, { 2.0f * half + 1.2f, 2.4f, 0.6f }, wallMat);
+    {
+        Material sand;
+        sand.ka = { 0.12f, 0.09f, 0.06f };  sand.kd = { 0.78f, 0.60f, 0.40f };
+        sand.ks = { 0.05f, 0.05f, 0.04f };  sand.shininess = 4.0f;
+        const glm::vec4 dunes[7] = {
+            { -45.0f, 120.0f, 46.0f,  9.0f }, {  10.0f, 128.0f, 52.0f, 11.0f },
+            {  55.0f, 118.0f, 40.0f,  8.0f }, { -20.0f, 150.0f, 60.0f, 15.0f },
+            {  40.0f, 160.0f, 70.0f, 17.0f }, { -70.0f, 140.0f, 50.0f, 12.0f },
+            {   0.0f, 104.0f, 34.0f,  5.0f },
+        };
+        for (const glm::vec4& d : dunes)
+        {
+            add(garden, "Dune", &m_sphere, { d.x, -d.w * 0.35f, d.y }, { d.z, d.w, d.z * 0.5f }, sand);
+        }
+    }
     const float sideW = half - Tuning::kCorridorHalfWidth;
     for (float side : { -1.0f, 1.0f })
     {
@@ -2355,9 +2461,10 @@ void Scene::buildGarden()
     {
         const glm::vec3 at(0.0f, 0.0f, front + 12.0f);
         add(garden, "PoolRim", &m_thinTorus, at + glm::vec3(0.0f, 0.08f, 0.0f),
-            { 3.8f, 3.0f, 3.8f }, kStone);
-        add(garden, "Water", &m_cylinder, at + glm::vec3(0.0f, 0.04f, 0.0f),
-            { 3.6f, 0.06f, 3.6f }, water);
+            { 4.95f, 3.0f, 4.95f }, kStone);
+        m_poolWater = add(garden, "Water", &m_cylinder, at + glm::vec3(0.0f, 0.04f, 0.0f),
+                          { 4.7f, 0.06f, 4.7f }, water);
+        m_poolCentre = at;
 
         Material lotusAlive = kFlesh;
         lotusAlive.kd = { 0.95f, 0.55f, 0.7f };  lotusAlive.emissive = { 0.12f, 0.05f, 0.08f };
@@ -2366,13 +2473,13 @@ void Scene::buildGarden()
         for (int i = 0; i < 3; ++i)
         {
             const float a = glm::radians(120.0f * static_cast<float>(i) + 20.0f);
-            const glm::vec3 p = at + glm::vec3(std::cos(a) * 0.9f, 0.1f, std::sin(a) * 0.9f);
+            const glm::vec3 p = at + glm::vec3(std::cos(a) * 1.4f, 0.1f, std::sin(a) * 1.4f);
             add(garden, "LotusPad", &m_cylinder, p, { 0.55f, 0.02f, 0.55f }, pad);
             SceneNode* flower = add(garden, "Lotus", &m_cone, p + glm::vec3(0.0f, 0.12f, 0.0f),
                                     { 0.3f, 0.22f, 0.3f }, lotus);
             shaped(flower, p).deadScale = { 0.12f, 0.12f, 0.12f };   // closed bud
         }
-        gardenObstacles.push_back({ at.x, at.z, 1.95f });
+        gardenObstacles.push_back({ at.x, at.z, 2.5f });
     }
 
     // --- palm trees in the corners: their fronds hang dead until life returns ------
@@ -2575,17 +2682,430 @@ void Scene::buildGarden()
     // --- the night sky: a moon and stars ---------------------------------------------
     Material moon = sky;
     moon.emissive = { 0.85f, 0.88f, 0.95f };
-    add(garden, "Moon", &m_sphere, { -16.0f, 32.0f, back + 26.0f }, { 4.0f, 4.0f, 4.0f }, moon);
+    m_moon = add(garden, "Moon", &m_sphere, { -16.0f, 32.0f, back + 26.0f }, { 4.0f, 4.0f, 4.0f }, moon);
 
     Material star = sky;
     for (int i = 0; i < 60; ++i)
     {
-        star.emissive = glm::vec3(random(0.6f, 1.0f));
+        const float b = random(0.6f, 1.0f);
+        star.emissive = glm::vec3(b);
         const float size = random(0.10f, 0.22f);
-        add(garden, "Star", &m_sphere,
+        m_stars.push_back(add(garden, "Star", &m_sphere,
             { random(-30.0f, 30.0f), random(16.0f, 34.0f), random(front - 5.0f, back + 35.0f) },
-            { size, size, size }, star);
+            { size, size, size }, star));
+        m_starBrightness.push_back(b);
     }
+
+    // --- dawn: a sun behind the back wall, its glow, and clouds ------------------
+    // All below the wall and unlit until dawn moves them.
+    Material sun = sky;
+    sun.emissive = { 1.0f, 0.5f, 0.2f };
+    m_sun = add(garden, "Sun", &m_sphere, { 6.0f, -12.0f, back + 85.0f }, { 10.0f, 10.0f, 10.0f }, sun);
+
+
+    Material cloud = sky;
+    cloud.opacity = 0.0f;           // they arrive with the dawn
+    for (int i = 0; i < 7; ++i)
+    {
+        const float w = random(6.0f, 11.0f);
+        m_clouds.push_back(add(garden, "Cloud", &m_sphere,
+            { random(-26.0f, 26.0f), random(17.0f, 25.0f), random(back + 8.0f, back + 40.0f) },
+            { w, w * 0.18f, w * 0.45f }, cloud));
+    }
+}
+
+void Scene::buildAscension()
+{
+    // --- the desert, all round the temple ---------------------------------------
+    // Under every floor, so it is only ever seen from outside: from the garden
+    // over the low wall, and from the sky as he rises.
+    Material sand;
+    sand.ka = { 0.12f, 0.09f, 0.06f };  sand.kd = { 0.78f, 0.60f, 0.40f };
+    sand.ks = { 0.04f, 0.04f, 0.03f };  sand.shininess = 4.0f;
+    add(m_root.get(), "Desert", &m_plane, { 0.0f, -0.05f, 60.0f }, { 2400.0f, 1.0f, 2400.0f }, sand);
+
+    const float f = gardenAltar.z - 1.9f;      // where he will stand
+    std::mt19937 rng(8080u);
+    auto random = [&rng](float low, float high)
+    {
+        std::uniform_real_distribution<float> dist(low, high);
+        return dist(rng);
+    };
+
+    // --- the sea of clouds --------------------------------------------------------
+    // Mostly their own colour (set each frame from the sky), only a little lit.
+    Material cloud;
+    cloud.ka = { 0.05f, 0.05f, 0.06f };  cloud.kd = { 0.14f, 0.14f, 0.15f };
+    cloud.ks = { 0.02f, 0.02f, 0.02f };  cloud.shininess = 4.0f;
+    auto puffAt = [&](const glm::vec3& p, const glm::vec3& size, float shade)
+    {
+        SceneNode* puff = add(m_root.get(), "CloudSea", &m_sphere, p, size, cloud);
+        puff->visible = false;
+        m_cloudSea.push_back(puff);
+        m_cloudShade.push_back(shade);
+    };
+
+    // Billowing towers: a wide shadowed base with smaller, sunlit puffs
+    // stacked on it. Low near his path, so they never hide him or the boat.
+    for (int i = 0; i < 48; ++i)
+    {
+        const glm::vec3 base(random(-190.0f, 190.0f), random(79.0f, 82.0f), random(f - 120.0f, f + 330.0f));
+        const bool nearPath = base.x > -100.0f && base.x < 30.0f && base.z > f - 50.0f && base.z < f + 120.0f;
+        const int layers = nearPath ? 2 : 2 + static_cast<int>(random(0.0f, 2.99f));
+        float w = random(26.0f, 44.0f);
+        float y = base.y;
+        for (int k = 0; k < layers; ++k)
+        {
+            const float h = (k == 0) ? random(5.0f, 7.0f)
+                                     : w * (nearPath ? random(0.15f, 0.2f) : random(0.3f, 0.42f));
+            puffAt({ base.x + random(-0.15f, 0.15f) * w, y, base.z + random(-0.15f, 0.15f) * w },
+                   { w, h, w * random(0.6f, 0.85f) },
+                   0.3f + 0.7f * static_cast<float>(k) / static_cast<float>(layers - 1));
+            y += h * 0.45f;
+            w *= random(0.55f, 0.72f);
+        }
+    }
+    // Low drifts filling between the towers.
+    for (int i = 0; i < 40; ++i)
+    {
+        const float w = random(26.0f, 44.0f);
+        puffAt({ random(-170.0f, 170.0f), random(78.0f, 82.0f), random(f - 120.0f, f + 300.0f) },
+               { w, random(4.0f, 6.0f), w * random(0.5f, 0.8f) }, 0.55f);
+    }
+    m_cloudFloor = add(m_root.get(), "CloudFloor", &m_sphere, { 0.0f, 75.5f, f + 90.0f },
+                       { 1200.0f, 4.0f, 1200.0f }, cloud);
+    m_cloudFloor->visible = false;
+    m_cloudSea.push_back(m_cloudFloor);
+    m_cloudShade.push_back(0.4f);
+
+    // ---- 2. the sky dome ---------------------------------------------------------
+    // Seen from inside, so it is drawn without face culling.
+    Material dome;
+    dome.sky = true;
+    m_skyDome = add(m_root.get(), "SkyDome", &m_sphere, { 0.0f, 0.0f, 0.0f },
+                    { 1500.0f, 1500.0f, 1500.0f }, dome);
+    m_skyDome->visible = false;
+
+    // --- the sun above the clouds ----------------------------------------------------
+    Material sky;
+    sky.ka = { 0.0f, 0.0f, 0.0f };  sky.kd = { 0.0f, 0.0f, 0.0f };  sky.ks = { 0.0f, 0.0f, 0.0f };
+    Material sun = sky;
+    sun.emissive = glm::vec3(1.0f, 0.78f, 0.42f) * 3.2f;
+    m_skySun = add(m_root.get(), "SkySun", &m_sphere, { 0.0f, 104.0f, f + 250.0f },
+                   { 26.0f, 26.0f, 26.0f }, sun);
+    m_skySun->visible = false;
+
+    // --- Ra's sun boat -----------------------------------------------------------------
+    // A long golden hull with curled papyrus ends, a cabin, the sun disc on
+    // its prow, and four oars a side on pivots at the hull's edge - so rowing
+    // is one rotation of each pivot, and the oar blades follow.
+    Material gold = kGold;
+    gold.emissive = { 0.62f, 0.44f, 0.12f };
+    gold.ks = { 1.0f, 0.9f, 0.6f };  gold.shininess = 96.0f;
+    Material trim = sky;
+    trim.emissive = glm::vec3(1.0f, 0.78f, 0.35f) * 2.2f;
+    Material lamp = sky;
+    lamp.emissive = glm::vec3(1.0f, 0.85f, 0.55f) * 3.0f;
+    Material darkGold = kGold;
+    darkGold.kd *= 0.6f;  darkGold.emissive = { 0.25f, 0.18f, 0.05f };
+    Material disc = sky;
+    disc.emissive = glm::vec3(1.0f, 0.45f, 0.15f) * 2.2f;
+
+    m_boat = m_root->createChild("SunBoat");
+    m_boat->visible = false;
+    add(m_boat, "Hull", &m_cube, { 0.0f, 0.0f, 0.0f }, { 2.4f, 0.8f, 9.0f }, gold);
+    add(m_boat, "Keel", &m_cube, { 0.0f, -0.5f, 0.0f }, { 1.4f, 0.4f, 7.5f }, darkGold);
+    add(m_boat, "Prow", &m_cone, { 0.0f, 1.4f, 5.0f }, { 0.9f, 3.2f, 0.9f }, gold)->rotation = { 35.0f, 0.0f, 0.0f };
+    add(m_boat, "Stern", &m_cone, { 0.0f, 1.4f, -5.0f }, { 0.9f, 3.2f, 0.9f }, gold)->rotation = { -35.0f, 0.0f, 0.0f };
+    add(m_boat, "ProwTip", &m_sphere, { 0.0f, 2.8f, 6.0f }, { 0.5f, 0.5f, 0.5f }, gold);
+    add(m_boat, "SternTip", &m_sphere, { 0.0f, 2.8f, -6.0f }, { 0.5f, 0.5f, 0.5f }, gold);
+    add(m_boat, "Cabin", &m_cube, { 0.0f, 1.15f, -0.8f }, { 1.8f, 1.5f, 2.4f }, darkGold);
+    add(m_boat, "Canopy", &m_cube, { 0.0f, 2.0f, -0.8f }, { 2.4f, 0.15f, 3.0f }, gold);
+    add(m_boat, "RaDisc", &m_sphere, { 0.0f, 3.3f, 2.6f }, { 1.8f, 1.8f, 1.8f }, disc);
+    add(m_boat, "DiscRing", &m_torus, { 0.0f, 3.3f, 2.6f }, { 2.4f, 2.4f, 2.4f }, gold)->rotation = { 90.0f, 0.0f, 0.0f };
+
+    // Bright rails along the hull's edges, and four lamps on posts.
+    for (int side = -1; side <= 1; side += 2)
+    {
+        const float sx = static_cast<float>(side);
+        add(m_boat, "Rail", &m_cube, { 1.22f * sx, 0.45f, 0.0f }, { 0.14f, 0.14f, 9.0f }, trim);
+        add(m_boat, "KeelLine", &m_cube, { 0.72f * sx, -0.72f, 0.0f }, { 0.1f, 0.1f, 7.4f }, trim);
+        for (int end = -1; end <= 1; end += 2)
+        {
+            const float z = 3.6f * static_cast<float>(end);
+            add(m_boat, "LampPost", &m_cylinder, { 1.1f * sx, 0.9f, z }, { 0.08f, 1.0f, 0.08f }, gold);
+            m_boatLampNodes.push_back(add(m_boat, "Lamp", &m_sphere, { 1.1f * sx, 1.5f, z },
+                                          { 0.35f, 0.35f, 0.35f }, lamp));
+        }
+    }
+
+    for (int side = -1; side <= 1; side += 2)
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            SceneNode* pivot = m_boat->createChild("OarPivot");
+            pivot->position = { 1.25f * static_cast<float>(side), 0.3f, -2.4f + 1.6f * static_cast<float>(k) };
+            SceneNode* oar = add(pivot, "Oar", &m_cylinder,
+                                 { 1.5f * static_cast<float>(side), -1.0f, 0.0f }, { 0.12f, 4.0f, 0.12f }, gold);
+            oar->rotation = { 0.0f, 0.0f, 55.0f * static_cast<float>(side) };
+            SceneNode* blade = add(pivot, "Blade", &m_cube, { 2.9f * static_cast<float>(side), -2.0f, 0.0f },
+                                   { 0.1f, 0.9f, 0.5f }, gold);
+            blade->rotation = { 0.0f, 0.0f, 55.0f * static_cast<float>(side) };
+            m_oarBlades.push_back(blade);
+            m_oars.push_back(pivot);
+        }
+    }
+    SceneNode* rudder = add(m_boat, "SteeringOar", &m_cylinder, { 0.9f, 0.6f, -4.6f }, { 0.14f, 4.5f, 0.14f }, gold);
+    rudder->rotation = { -40.0f, 0.0f, 20.0f };
+
+    // --- the Ba birds ------------------------------------------------------------------
+    // The soul as the Egyptians drew it: a bird with a human face. A gold
+    // body and tail, a pale face under a dark blue headdress, and wings on
+    // pivots at the shoulders - so flapping is one roll of each pivot.
+    Material face = kGold;
+    face.diffuseMap = nullptr;
+    face.kd = { 0.95f, 0.80f, 0.60f };  face.emissive = { 0.40f, 0.30f, 0.18f };
+    Material headdress = sky;
+    headdress.kd = { 0.10f, 0.16f, 0.45f };  headdress.ka = { 0.05f, 0.07f, 0.2f };
+    headdress.ks = { 0.4f, 0.4f, 0.5f };  headdress.emissive = { 0.05f, 0.08f, 0.25f };
+    Material feather = gold;
+    Material featherTip = sky;
+    featherTip.kd = { 0.15f, 0.65f, 0.70f };  featherTip.emissive = { 0.08f, 0.45f, 0.50f };
+
+    const glm::vec3 offsets[5] = {
+        { -6.0f, 6.0f,  8.0f }, {  8.0f, 4.5f, -1.0f }, { -3.0f, 10.0f,  2.0f },
+        { 11.0f, 2.5f,  5.0f }, {  5.0f, 8.0f,  8.0f } };
+    for (int i = 0; i < 5; ++i)
+    {
+        BaBird bird;
+        bird.offset = offsets[i];
+        bird.phase  = 1.3f * static_cast<float>(i);
+        bird.root = m_root->createChild("BaBird");
+        bird.root->visible = false;
+        add(bird.root, "Body", &m_sphere, { 0.0f, 0.0f, 0.0f }, { 0.95f, 0.8f, 1.9f }, feather);
+        add(bird.root, "Tail", &m_cube, { 0.0f, 0.05f, -1.1f }, { 0.7f, 0.1f, 0.9f }, feather)->rotation = { -12.0f, 0.0f, 0.0f };
+        add(bird.root, "TailTip", &m_cube, { 0.0f, 0.15f, -1.6f }, { 0.75f, 0.08f, 0.35f }, featherTip)->rotation = { -12.0f, 0.0f, 0.0f };
+        add(bird.root, "Headdress", &m_sphere, { 0.0f, 0.65f, 0.9f }, { 0.75f, 0.72f, 0.72f }, headdress);
+        add(bird.root, "Face", &m_sphere, { 0.0f, 0.6f, 1.12f }, { 0.55f, 0.6f, 0.5f }, face);
+        for (int side = -1; side <= 1; side += 2)
+        {
+            const float sx = static_cast<float>(side);
+            SceneNode* pivot = bird.root->createChild("WingPivot");
+            pivot->position = { 0.3f * sx, 0.2f, 0.1f };
+            add(pivot, "Wing", &m_cube, { 1.1f * sx, 0.0f, 0.0f }, { 2.0f, 0.1f, 1.15f }, feather);
+            add(pivot, "WingTip", &m_cube, { 2.45f * sx, 0.0f, -0.2f }, { 0.9f, 0.08f, 0.8f }, featherTip)
+                ->rotation = { 0.0f, -15.0f * sx, 0.0f };
+            if (side < 0) { bird.leftWing = pivot; } else { bird.rightWing = pivot; }
+        }
+        m_baBirds.push_back(bird);
+    }
+}
+
+void Scene::applyAscension(const Ascension& a)
+{
+    m_ascendGlow  = a.bodyGlow();
+    m_ascendFade  = a.bodyFade();
+    m_ascendNight = a.skyNight();
+    m_boatLevel   = a.boat();
+
+    const float c = a.clouds();
+    // The colour each cloud should look on screen, turned back into the
+    // emissive that gives it through the shader's tone map.
+    auto shown = [](glm::vec3 d)
+    {
+        d = glm::clamp(d, glm::vec3(0.0f), glm::vec3(0.94f));
+        const glm::vec3 x = glm::pow(d, glm::vec3(1.6f));
+        return x / (glm::vec3(1.0f) - x);
+    };
+    const glm::vec3 sunAt = a.skySunPosition();
+    const float g = a.skyGold();
+    for (std::size_t i = 0; i < m_cloudSea.size(); ++i)
+    {
+        SceneNode* puff = m_cloudSea[i];
+        puff->visible = c > 0.01f;
+        puff->material.opacity = (c < 0.99f) ? c : 1.0f;
+
+        // Sunlit tops, shadowed bases; pink and lilac at sunset, gold near
+        // the sun; blue-grey at night.
+        const float lit = m_cloudShade[i];
+        const glm::vec2 off(puff->position.x - sunAt.x, puff->position.z - sunAt.z);
+        const float warm = Easing::clamp01(1.0f - glm::length(off) / 260.0f);
+        const glm::vec3 day = glm::mix(glm::vec3(0.70f, 0.73f, 0.82f), glm::vec3(0.94f, 0.94f, 0.96f), lit);
+        const glm::vec3 sunset = glm::mix(glm::vec3(0.60f, 0.47f, 0.72f),
+                                          glm::mix(glm::vec3(0.97f, 0.70f, 0.72f), glm::vec3(0.99f, 0.84f, 0.56f), warm),
+                                          Easing::clamp01(lit * 0.8f + warm * 0.4f));
+        const glm::vec3 night = glm::mix(glm::vec3(0.08f, 0.08f, 0.17f), glm::vec3(0.17f, 0.18f, 0.32f), lit);
+        puff->material.emissive = shown(glm::mix(glm::mix(day, sunset, g), night, m_ascendNight));
+    }
+    if (m_skyDome != nullptr)
+    {
+        m_skyDome->visible = g > 0.01f || m_ascendNight > 0.01f;
+    }
+
+    if (m_skySun != nullptr)
+    {
+        m_skySun->visible = a.skySun() > 0.01f;
+        m_skySun->position = a.skySunPosition();
+        m_skySun->material.emissive = glm::vec3(1.0f, 0.78f, 0.42f) * 3.2f * a.skySun();
+    }
+
+    if (m_boat != nullptr)
+    {
+        m_boat->visible = m_boatLevel > 0.01f;
+        m_boat->position = a.boatPosition();
+        m_boat->scale = glm::vec3(0.2f + 0.8f * m_boatLevel);   // it grows out of the light
+        for (std::size_t i = 0; i < m_oars.size(); ++i)
+        {
+            m_oars[i]->rotation = { a.oarAngle(static_cast<int>(i)), 0.0f, 0.0f };
+        }
+    }
+
+    // The Ba birds fly with the boat, weaving and flapping, and leave as night falls.
+    const float t = a.time();
+    const float birds = m_boatLevel * (1.0f - Easing::clamp01(m_ascendNight * 2.0f));
+    for (BaBird& bird : m_baBirds)
+    {
+        bird.root->visible = birds > 0.01f;
+        if (!bird.root->visible) { continue; }
+        const float p = bird.phase;
+        bird.root->position = a.boatPosition() + bird.offset * (0.4f + 0.6f * m_boatLevel)
+                            + glm::vec3(1.2f * std::sin(t * 0.7f + p), 0.8f * std::sin(t * 1.3f + p),
+                                        1.5f * std::sin(t * 0.5f + p));
+        bird.root->scale = glm::vec3(birds);
+        // Gliding a little, then a few strong beats.
+        const float beat = std::sin(t * 7.0f + p);
+        const float flap = 10.0f + 32.0f * beat;
+        bird.leftWing->rotation  = { 0.0f, 0.0f, -flap };
+        bird.rightWing->rotation = { 0.0f, 0.0f,  flap };
+        // Banking as it weaves, nose up on the down-stroke.
+        bird.root->rotation = { -6.0f * beat, 0.0f, 12.0f * std::cos(t * 0.7f + p) };
+    }
+}
+
+void Scene::uploadRayTracing(const Shader& shader) const
+{
+    const bool on = rayTracing && m_gardenRoot != nullptr && m_gardenRoot->visible && m_poolWater != nullptr;
+    shader.setInt("uRtEnabled", on ? 1 : 0);
+    if (!on) { m_rtBoxes = 0; m_rtBlobs = 0; return; }
+
+    // Every visible shape in the garden becomes a world-space box, or an
+    // ellipsoid if it is a sphere - with its current colour, alive or dead.
+    struct Shape { glm::vec3 lo, hi, kd, glow; float key; };
+    std::vector<Shape> boxes, blobs;
+
+    std::function<void(const SceneNode&)> walk = [&](const SceneNode& n)
+    {
+        if (!n.visible) { return; }
+        if (n.mesh != nullptr && &n != m_poolWater && !n.material.sky && n.material.opacity > 0.3f)
+        {
+            glm::vec3 lo(1e9f), hi(-1e9f);
+            for (int c = 0; c < 8; ++c)
+            {
+                const glm::vec4 corner((c & 1) ? 0.5f : -0.5f, (c & 2) ? 0.5f : -0.5f, (c & 4) ? 0.5f : -0.5f, 1.0f);
+                const glm::vec3 w = glm::vec3(n.world() * corner);
+                lo = glm::min(lo, w);
+                hi = glm::max(hi, w);
+            }
+            const glm::vec3 size = hi - lo;
+            const float biggest = std::max(size.x, std::max(size.y, size.z));
+            // Not the flat things on the ground (paths, pads, the rim), nor
+            // specks, nor the endless desert.
+            if (hi.y > 0.35f && biggest > 0.12f && std::max(size.x, size.z) < 150.0f)
+            {
+                const glm::vec3 centre = 0.5f * (lo + hi);
+                glm::vec3 kd = n.material.kd, glow = n.material.emissive;
+                if (n.material.living)
+                {
+                    const float life = gardenLifeAt(centre);
+                    kd   = glm::mix(n.material.deadKd, kd, life);
+                    glow = glm::mix(n.material.deadEmissive, glow, life);
+                }
+                // A ray cannot sample the texture, so use its mean colour.
+                if (n.material.diffuseMap != nullptr) { kd *= n.material.diffuseMap->average(); }
+                const glm::vec2 off(centre.x - m_poolCentre.x, centre.z - m_poolCentre.z);
+                float key = glm::length(off) - 0.5f * biggest;
+                // The moon, the sun and the dunes: far, but always in the mirror.
+                if (biggest > 3.0f && (glow.x + glow.y + glow.z > 0.5f || size.x > 20.0f)) { key = -1000.0f; }
+                const Shape s{ lo, hi, kd, glow, key };
+                if (n.mesh == &m_sphere) { blobs.push_back(s); }
+                else                     { boxes.push_back(s); }
+            }
+        }
+        for (const std::unique_ptr<SceneNode>& child : n.children()) { walk(*child); }
+    };
+    walk(*m_gardenRoot);
+    if (traveller != nullptr) { walk(*traveller); }
+
+    auto nearest = [](std::vector<Shape>& v, std::size_t most)
+    {
+        std::sort(v.begin(), v.end(), [](const Shape& a, const Shape& b) { return a.key < b.key; });
+        if (v.size() > most) { v.resize(most); }
+    };
+    nearest(boxes, 48);
+    nearest(blobs, 40);
+
+    m_rtBoxes = static_cast<int>(boxes.size());
+    m_rtBlobs = static_cast<int>(blobs.size());
+    shader.setInt("uRtBoxCount", m_rtBoxes);
+    shader.setInt("uRtBlobCount", m_rtBlobs);
+    for (int i = 0; i < m_rtBoxes; ++i)
+    {
+        const std::string k = "[" + std::to_string(i) + "]";
+        shader.setVec3("uRtBoxMin" + k, boxes[i].lo);
+        shader.setVec3("uRtBoxMax" + k, boxes[i].hi);
+        shader.setVec3("uRtBoxKd" + k, boxes[i].kd + boxes[i].glow);
+    }
+    for (int i = 0; i < m_rtBlobs; ++i)
+    {
+        const std::string k = "[" + std::to_string(i) + "]";
+        shader.setVec3("uRtBlobCentre" + k, 0.5f * (blobs[i].lo + blobs[i].hi));
+        shader.setVec3("uRtBlobRadii" + k, glm::max(0.5f * (blobs[i].hi - blobs[i].lo), glm::vec3(0.01f)));
+        shader.setVec3("uRtBlobKd" + k, blobs[i].kd);
+        shader.setVec3("uRtBlobGlow" + k, blobs[i].glow);
+    }
+
+    // The light the traced surfaces see: the same garden light the rest of
+    // the scene is lit by - moonlight, turning to warm sunlight at dawn.
+    const float d = Easing::smoothstep01(dawn);
+    shader.setVec3("uRtLightPos", glm::mix(glm::vec3(0.0f, 8.0f, 82.0f), glm::vec3(4.0f, 14.0f, 94.0f), d));
+    shader.setVec3("uRtLightColor", glm::mix(glm::vec3(0.72f, 0.82f, 1.0f) * 0.8f, glm::vec3(1.0f, 0.84f, 0.60f) * 1.3f, d));
+}
+
+void Scene::placeSkyDome(const glm::vec3& eye)
+{
+    if (m_skyDome != nullptr) { m_skyDome->position = eye; }
+}
+
+std::vector<glm::vec3> Scene::boatLamps() const
+{
+    std::vector<glm::vec3> out;
+    for (const SceneNode* n : m_boatLampNodes) { out.push_back(n->worldPosition()); }
+    return out;
+}
+
+std::vector<glm::vec3> Scene::baBirds() const
+{
+    std::vector<glm::vec3> out;
+    for (const BaBird& bird : m_baBirds)
+    {
+        if (bird.root->visible) { out.push_back(bird.root->worldPosition()); }
+    }
+    return out;
+}
+
+std::vector<glm::vec3> Scene::oarBlades() const
+{
+    std::vector<glm::vec3> out;
+    for (const SceneNode* n : m_oarBlades) { out.push_back(n->worldPosition()); }
+    return out;
+}
+
+glm::vec3 Scene::sunPosition() const
+{
+    // Out of the dunes on the horizon, beyond the low back wall.
+    const float rise = Easing::smoothstep01(Easing::clamp01(dawn));
+    return glm::mix(glm::vec3(6.0f, -12.0f, Tuning::kGardenBackZ + 85.0f),
+                    glm::vec3(4.0f, 16.0f, Tuning::kGardenBackZ + 85.0f), rise);
 }
 
 glm::vec3 Scene::statueChest(int i) const
@@ -2996,19 +3516,27 @@ void Scene::draw(const Shader& shader, const glm::vec3& cameraPosition) const
     }
 
     // --- petrification uniforms, shared by every draw this frame ------------
-    shader.setFloat("uPetrify", m_petrify);
+    // The same front that turns him to stone turns him to light when he
+    // ascends - gold instead of grey, glowing instead of dull.
+    const bool ascending = m_ascendGlow > 0.0f;
+    shader.setFloat("uPetrify", ascending ? m_ascendGlow : m_petrify);
+    shader.setVec3 ("uStoneEmissive", ascending ? glm::vec3(0.70f, 0.42f, 0.08f) : glm::vec3(0.0f));
+    shader.setVec3 ("uPetrifyEdge",   ascending ? glm::vec3(1.0f, 0.85f, 0.40f)
+                                                : glm::vec3(0.10f, 0.32f, 0.12f));
     shader.setFloat("uPetrifyBaseY",
                     traveller != nullptr ? traveller->worldPosition().y : 0.0f);
     shader.setFloat("uPetrifyHeight", kTravellerHeight);
 
-    shader.setVec3 ("uStoneKa", Materials::petrified.ka);
-    shader.setVec3 ("uStoneKd", Materials::petrified.kd);
-    shader.setVec3 ("uStoneKs", Materials::petrified.ks);
-    shader.setFloat("uStoneShininess", Materials::petrified.shininess);
+    shader.setVec3 ("uStoneKa", ascending ? glm::vec3(0.30f, 0.18f, 0.04f) : Materials::petrified.ka);
+    shader.setVec3 ("uStoneKd", ascending ? glm::vec3(0.90f, 0.60f, 0.15f) : Materials::petrified.kd);
+    shader.setVec3 ("uStoneKs", ascending ? glm::vec3(1.00f, 0.85f, 0.45f) : Materials::petrified.ks);
+    shader.setFloat("uStoneShininess", ascending ? 64.0f : Materials::petrified.shininess);
 
     // The garden's wave of life, for every living material.
     shader.setVec3 ("uLifeCentre", gardenWaveCentre);
     shader.setFloat("uLifeRadius", gardenWaveRadius);
+
+    uploadRayTracing(shader);
 
     // --- pass 1: opaque, depth writes on ------------------------------------
     m_root->draw(shader);

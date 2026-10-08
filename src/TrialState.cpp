@@ -36,7 +36,7 @@ float TrialController::durationOf(TrialState state)
         // the treasure, not the end of the story.
         // Long enough for the lamp to open and the magic to rise, because
         // that is what produces the treasure.
-        case TrialState::Balanced:         return 4.5f;
+        case TrialState::Balanced:         return 5.6f;
 
         // She wakes and turns. The petrification itself is the Caught state.
         case TrialState::Cursed:           return 3.5f;
@@ -140,10 +140,10 @@ float TrialController::charm() const
     switch (m_state)
     {
         case TrialState::Balanced:
-            // After the lid is open and the column has risen (it is full by
-            // 0.7), so it reads as the Djinn's answer rather than part of the
-            // lamp opening.
-            return Easing::smoothstep01(Easing::clamp01((progress() - 0.55f) / 0.40f));
+            // Only once the Djinn has fully formed (by about 2.9 s) and has
+            // reached his hand out to the traveller (3.0 - 3.6 s): then it
+            // leaves his hand and flies over, arriving at 5.2 s.
+            return Easing::smoothstep01(Easing::clamp01((m_stateTime - 3.7f) / 1.5f));
 
         case TrialState::TreasureRevealed:
         case TrialState::Escape:

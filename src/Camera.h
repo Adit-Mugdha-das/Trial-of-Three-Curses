@@ -47,6 +47,7 @@ public:
     void setPosition(const glm::vec3& position) { m_position = position; }
 
     void setYaw(float yaw) { m_yaw = yaw; }
+    void setFarPlane(float farPlane) { m_farPlane = farPlane; }
     void setPitch(float pitch);
     float yaw() const { return m_yaw; }
     float pitch() const { return m_pitch; }

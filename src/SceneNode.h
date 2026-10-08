@@ -58,6 +58,7 @@ public:
 
     const glm::mat4& world() const { return m_world; }
     glm::vec3 worldPosition() const { return glm::vec3(m_world[3]); }
+    const std::vector<std::unique_ptr<SceneNode>>& children() const { return m_children; }
 
     // Direction the node's local +Z points, in world space. Used to aim
     // Medusa's eye spotlights down her head's forward axis in Phase 9.

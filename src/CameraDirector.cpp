@@ -126,12 +126,27 @@ CameraDirector::Shot CameraDirector::shotFor(TrialState state) const
             }
             // ...then low, looking up past the empty plinths at the souls
             // rising into the stars...
-            if (m_offerTime < Tuning::kOfferFlight + 14.0f)
+            if (m_offerTime < Tuning::kOfferFlight + 9.0f)
             {
                 return { { 0.0f, 5.5f, Tuning::kGardenFrontZ + 9.0f }, 10.0f, 270.0f, -12.0f };
             }
-            // ...and pull back over the garden come alive.
-            return { { 0.0f, 1.5f, 82.0f }, 10.5f, 20.0f, 35.0f };
+            // ...then across the living garden to the sun rising over the
+            // back wall: garden below, the low wall and the dunes across the
+            // middle, the sky and the rising sun above...
+            if (m_offerTime < Tuning::kOfferFlight + Tuning::kDawnStart + Tuning::kDawnTime - 1.0f)
+            {
+                return { { 0.0f, 4.0f, Tuning::kGardenBackZ - 4.0f }, 11.0f, 270.0f, 15.0f };
+            }
+            // ...and last, low across the pool, so the sun, the palms and the
+            // wall shine in its ray-traced reflection.
+            {
+                const glm::vec3 eye(1.6f, 1.5f, Tuning::kGardenBackZ - 0.9f);
+                const glm::vec3 look(-0.3f, 0.6f, Tuning::kGardenBackZ - 7.5f);
+                const glm::vec3 d = eye - look;
+                const float distance = glm::length(d);
+                return { look, distance, glm::degrees(std::atan2(d.z, d.x)),
+                         glm::degrees(std::asin(d.y / distance)) };
+            }
 
         case TrialState::Escaped:
             return { m_follow + glm::vec3(0.0f, 1.6f, 0.0f), 9.0f, 250.0f, 14.0f };
