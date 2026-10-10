@@ -49,6 +49,20 @@ namespace
 
     ViewMode gViewMode = ViewMode::Cinematic;
 
+#ifdef TRIAL_AUTOPLAY
+    // TRIAL_TECH_SHOTS: a guided tour through the inspection toggles (T, Y,
+    // V, N, G), each captured a moment after it is set. One run, early in
+    // Waiting, before the trial itself is allowed to begin. File-scope so
+    // both the toggle sequencer and the close-up camera it uses - two
+    // separate blocks further down - can see the same step.
+    int   gTechStep = 0;
+    float gTechClock = 0.0f;
+    bool  gTechShotsDone = false;
+
+    // TRIAL_GOURAUD_SHOTS: the same view lit per pixel, then per vertex.
+    bool  gGouraudShotsDone = false;
+#endif
+
     const char* viewModeName(ViewMode mode)
     {
         switch (mode)
@@ -358,7 +372,7 @@ int main()
 
     bool shadowsAvailable = depthShader.load("shaders/depth.vert",
                                              "shaders/depth.frag")
-                         && shadowMap.init(1024);
+                         && shadowMap.init(2048);    // twice the detail: crisper, steadier shadow edges
 
     if (!shadowsAvailable)
     {
@@ -653,6 +667,7 @@ int main()
 
     bool debugNormals    = false;
     bool wireframe       = false;
+    bool useGouraud      = false;   // F4: per-vertex Gouraud instead of per-pixel Blinn-Phong
     bool showLightMarkers = false;
     bool useTextures      = true;
 
@@ -672,6 +687,9 @@ int main()
               << "  G          toggle shadows\n"
               << "  J          toggle Djinn smoke particles\n"
               << "  U          toggle post-processing\n"
+              << "  F2         toggle ambient occlusion (contact shading)\n"
+              << "  F3         toggle bloom (glow around bright light)\n"
+              << "  F4         switch shading: Blinn-Phong (per pixel) / Gouraud (per vertex)\n"
               << "  V          toggle normal mapping\n"
               << "  F5         reload shaders\n"
               << "  ESC        quit\n"
@@ -721,13 +739,14 @@ int main()
         {
             char title[256];
             snprintf(title, sizeof(title),
-                     "The Trial of Three Curses  |  %.0f FPS  |  %s  |  weight %.2f (%s)  |  %s  |  ray tracing %s (Z)",
+                     "The Trial of Three Curses  |  %.0f FPS  |  %s  |  weight %.2f (%s)  |  %s  |  ray tracing %s (Z)  |  %s (F4)",
                      frameCount / fpsTimer,
                      inspectMode ? "INSPECT" : trial.stateName(),
                      trial.heartWeight(),
                      trial.isBalanced() ? "balanced" : "unbalanced",
                      viewModeName(gViewMode),
-                     scene.rayTracing ? "ON" : "OFF");
+                     scene.rayTracing ? "ON" : "OFF",
+                     useGouraud ? "Gouraud" : "Blinn-Phong");
             glfwSetWindowTitle(window, title);
 
             fpsTimer   = 0.0f;
@@ -756,6 +775,24 @@ int main()
         if (pressed(window, GLFW_KEY_G,  shadowHeld))  { useShadows = !useShadows; }
         if (pressed(window, GLFW_KEY_J,  particleHeld)) { useParticles = !useParticles; }
         if (pressed(window, GLFW_KEY_U,  postHeld))     { usePost = !usePost; }
+        static bool occlusionHeld = false;
+        if (pressed(window, GLFW_KEY_F2, occlusionHeld))
+        {
+            post.setOcclusion(!post.occlusion());
+            std::cout << "[Post] ambient occlusion " << (post.occlusion() ? "ON" : "OFF") << std::endl;
+        }
+        static bool bloomHeld = false;
+        if (pressed(window, GLFW_KEY_F3, bloomHeld))
+        {
+            post.setBloom(!post.bloom());
+            std::cout << "[Post] bloom " << (post.bloom() ? "ON" : "OFF") << std::endl;
+        }
+        static bool gouraudHeld = false;
+        if (pressed(window, GLFW_KEY_F4, gouraudHeld))
+        {
+            useGouraud = !useGouraud;
+            std::cout << "[Shading] " << (useGouraud ? "Gouraud (per vertex)" : "Blinn-Phong (per pixel)") << std::endl;
+        }
         if (pressed(window, GLFW_KEY_V,  normalMapHeld)) { useNormalMaps = !useNormalMaps; }
         static bool rayHeld = false;
         if (pressed(window, GLFW_KEY_Z,  rayHeld))
@@ -1398,12 +1435,144 @@ int main()
             static float autoReport = 0.0f;
             autoClock += deltaTime;
 
-            if (autoClock > 1.0f && trial.state() == TrialState::Waiting)
+            if (autoClock > 1.0f && trial.state() == TrialState::Waiting
+                && (!std::getenv("TRIAL_TECH_SHOTS") || gTechShotsDone)
+                && (!std::getenv("TRIAL_GOURAUD_SHOTS") || gGouraudShotsDone))
             {
                 // The blessed path: only a true heart is ever offered the
                 // treasure, so only it reaches the escape and the gaze.
                 std::cout << "[auto] pressing 1 (blessed)" << std::endl;
                 trial.forceOutcome(true);
+            }
+
+            // The two shading models, same view, a moment apart.
+            if (const char* shadeDir = std::getenv("TRIAL_SHOT_DIR"))
+            {
+                if (std::getenv("TRIAL_GOURAUD_SHOTS") && !gGouraudShotsDone
+                    && trial.state() == TrialState::Waiting)
+                {
+                    static float shadeClock = 0.0f;
+                    static int   shadeStep  = 0;
+                    shadeClock += deltaTime;
+                    auto shoot = [&](const char* name)
+                    {
+                        saveFrameBmp(std::string(shadeDir) + "/" + name + ".bmp",
+                                     gWindowWidth, gWindowHeight);
+                        std::cout << "[shot] " << name << std::endl;
+                    };
+                    if (shadeStep == 0 && shadeClock >= 0.4f)
+                    {
+                        shoot("shading_blinn_phong");
+                        useGouraud = true;
+                        shadeStep = 1;
+                    }
+                    else if (shadeStep == 1 && shadeClock >= 0.6f)
+                    {
+                        shoot("shading_gouraud");
+                        useGouraud = false;
+                        gGouraudShotsDone = true;
+                    }
+                }
+            }
+
+            // The guided tour itself: wireframe, textures, normal mapping
+            // (both the shaded result and the RGB debug view), then shadows.
+            // Each step sets one toggle, waits a frame for it to render, then
+            // saves the shot and moves to the next.
+            if (const char* techDir = std::getenv("TRIAL_SHOT_DIR"))
+            {
+                if (std::getenv("TRIAL_TECH_SHOTS") && !gTechShotsDone
+                    && trial.state() == TrialState::Waiting)
+                {
+                    gTechClock += deltaTime;
+                    auto shoot = [&](const char* name)
+                    {
+                        saveFrameBmp(std::string(techDir) + "/" + name + ".bmp",
+                                     gWindowWidth, gWindowHeight);
+                        std::cout << "[shot] " << name << std::endl;
+                    };
+
+                    if (gTechStep == 0 && gTechClock >= 0.10f)
+                    {
+                        shoot("with_texture");
+                        gTechStep = 1;
+                    }
+                    else if (gTechStep == 1 && gTechClock >= 0.35f)
+                    {
+                        wireframe = true;
+                        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                        gTechStep = 2;
+                    }
+                    else if (gTechStep == 2 && gTechClock >= 0.55f)
+                    {
+                        shoot("wireframe_view");
+                        wireframe = false;
+                        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                        useTextures = false;
+                        gTechStep = 3;
+                    }
+                    else if (gTechStep == 3 && gTechClock >= 0.85f)
+                    {
+                        shoot("without_texture");
+                        useTextures = true;
+                        gTechStep = 4;   // the wall close-up camera takes over now
+                    }
+                    else if (gTechStep == 4 && gTechClock >= 1.15f)
+                    {
+                        useNormalMaps = false;
+                        gTechStep = 5;
+                    }
+                    else if (gTechStep == 5 && gTechClock >= 1.45f)
+                    {
+                        shoot("normalmap_off");
+                        useNormalMaps = true;
+                        gTechStep = 6;
+                    }
+                    else if (gTechStep == 6 && gTechClock >= 1.75f)
+                    {
+                        shoot("normalmap_on");
+                        debugNormals  = true;
+                        useNormalMaps = false;     // the geometric normal, unperturbed
+                        gTechStep = 7;
+                    }
+                    else if (gTechStep == 7 && gTechClock >= 2.05f)
+                    {
+                        shoot("normal_debug_off");
+                        useNormalMaps = true;      // the same normal, now perturbed
+                        gTechStep = 8;
+                    }
+                    else if (gTechStep == 8 && gTechClock >= 2.35f)
+                    {
+                        shoot("normal_debug_on");
+                        debugNormals = false;
+                        useShadows   = false;
+                        gTechStep = 9;   // camera returns to the establishing shot
+                    }
+                    else if (gTechStep == 9 && gTechClock >= 2.85f)
+                    {
+                        shoot("without_shadow");
+                        useShadows = true;
+                        gTechStep = 10;
+                    }
+                    else if (gTechStep == 10 && gTechClock >= 3.15f)
+                    {
+                        shoot("with_shadow");
+                        gTechShotsDone = true;
+                        std::cout << "[auto] tech-shot tour complete" << std::endl;
+                    }
+                }
+            }
+
+            // TRIAL_FORCE_CAUGHT: let Medusa catch him once in the escape, so
+            // the petrification can be captured; the next run goes on to the
+            // garden as usual.
+            static bool forcedCatch = false;
+            if (!forcedCatch && std::getenv("TRIAL_FORCE_CAUGHT")
+                && trial.state() == TrialState::Escape && trial.stateTime() > 1.2f)
+            {
+                forcedCatch = true;
+                std::cout << "[auto] caught on purpose, for the curse screenshots" << std::endl;
+                trial.caught();
             }
 
             if (trial.state() == TrialState::TreasureRevealed && trial.stateTime() > 3.6f)
@@ -1796,6 +1965,42 @@ int main()
         {
             keepCameraOutOfWalls(gCamera, trial.state());
         }
+
+#ifdef TRIAL_AUTOPLAY
+        // For the normal-mapping shots: close on the textured back wall, so
+        // the relief the normal map adds is actually big enough to see.
+        if (std::getenv("TRIAL_TECH_SHOTS") && gTechStep >= 4 && gTechStep <= 8)
+        {
+            const glm::vec3 look(0.0f, 2.6f, -10.7f);
+            const glm::vec3 eye(1.6f, 2.9f, -8.0f);
+            const glm::vec3 d = eye - look;
+            const float distance = glm::length(d);
+            gCamera.setTarget(look);
+            gCamera.setDistance(distance);
+            gCamera.setYaw(glm::degrees(std::atan2(d.z, d.x)));
+            gCamera.setPitch(glm::degrees(std::asin(d.y / distance)));
+        }
+
+        // For the curse screenshots: from his side, across the line of her
+        // gaze, so the stone climbing him and the beam reaching him both show.
+        if (std::getenv("TRIAL_FORCE_CAUGHT") && trial.state() == TrialState::Caught
+            && scene.medusaRoot != nullptr)
+        {
+            const glm::vec3 him = player.position();
+            glm::vec3 fromHer = him - scene.medusaRoot->position;
+            fromHer.y = 0.0f;
+            fromHer = (glm::length(fromHer) > 1e-3f) ? glm::normalize(fromHer) : glm::vec3(0.0f, 0.0f, 1.0f);
+            const glm::vec3 side = glm::normalize(glm::cross(fromHer, glm::vec3(0.0f, 1.0f, 0.0f)));
+            const glm::vec3 look = him + glm::vec3(0.0f, 1.15f, 0.0f);
+            const glm::vec3 eye  = look + side * 6.2f - fromHer * 1.2f + glm::vec3(0.0f, 0.5f, 0.0f);
+            const glm::vec3 d = eye - look;
+            const float distance = glm::length(d);
+            gCamera.setTarget(look);
+            gCamera.setDistance(distance);
+            gCamera.setYaw(glm::degrees(std::atan2(d.z, d.x)));
+            gCamera.setPitch(glm::degrees(std::asin(d.y / distance)));
+        }
+#endif
 
         // Far enough to see the cloud sea, the sky sun and the stars.
         gCamera.setFarPlane(ascension.active() ? 900.0f : 200.0f);
@@ -2512,6 +2717,7 @@ int main()
         shader.setInt("uDebugNormals", debugNormals ? 1 : 0);
         shader.setInt("uUseTextures", useTextures ? 1 : 0);
         shader.setInt("uUseNormalMaps", useNormalMaps ? 1 : 0);
+        shader.setInt("uGouraud", useGouraud ? 1 : 0);
 
         // Texture units: 0 diffuse, 1 specular (both set per material), 2 the
         // shadow map. Bound once here; nothing else touches unit 2, so it
@@ -2557,6 +2763,7 @@ int main()
         // the scene, and should stay legible while the image desaturates.
         if (postOn)
         {
+            post.setProjection(gCamera.projection(aspect));
             post.endSceneAndResolve();
         }
 
@@ -2605,7 +2812,13 @@ int main()
         if (const char* shotDir = std::getenv("TRIAL_SHOT_DIR"))
         {
             struct Moment { TrialState state; float at; const char* name; };
+            static std::string pendingOffShot;
+            static int offShotFrame = 0;
+            static bool pendingPost = false;     // which effect the "_off" frame turns off
             static const Moment moments[] = {
+                { TrialState::Caught,    2.2f, "p_curse0" },
+                { TrialState::Caught,    2.6f, "p_curse1" },
+                { TrialState::Caught,    3.0f, "p_curse2" },
                 { TrialState::Placing,   0.5f, "a_chamber" },
                 { TrialState::Balanced,  1.9f, "a_djinn1_rise" },
                 { TrialState::Balanced,  2.6f, "a_djinn2_rise" },
@@ -2650,7 +2863,33 @@ int main()
                     saveFrameBmp(std::string(shotDir) + "/" + moments[i].name + ".bmp",
                                  gWindowWidth, gWindowHeight);
                     printf("[shot] %s\n", moments[i].name);
+
+                    // The pool shots again one frame later with the ray
+                    // tracing off, and the curse shots with the post-
+                    // processing off: the same view, for a fair comparison.
+                    const std::string name(moments[i].name);
+                    if (name.rfind("r_pool", 0) == 0 && scene.rayTracing)
+                    {
+                        pendingOffShot = name + "_off";
+                        pendingPost = false;
+                        scene.rayTracing = false;
+                    }
+                    else if (name.rfind("p_curse", 0) == 0 && usePost)
+                    {
+                        pendingOffShot = name + "_off";
+                        pendingPost = true;
+                        usePost = false;
+                    }
                 }
+            }
+            if (!pendingOffShot.empty() && offShotFrame++ > 0)
+            {
+                saveFrameBmp(std::string(shotDir) + "/" + pendingOffShot + ".bmp",
+                             gWindowWidth, gWindowHeight);
+                printf("[shot] %s\n", pendingOffShot.c_str());
+                pendingOffShot.clear();
+                offShotFrame = 0;
+                if (pendingPost) { usePost = true; } else { scene.rayTracing = true; }
             }
 
             // The sun's ray, by its own clock.

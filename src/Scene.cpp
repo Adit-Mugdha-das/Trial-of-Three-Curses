@@ -354,30 +354,157 @@ void Scene::buildMedusa()
     medusa->rotation = { 0.0f, -35.0f, 0.0f };   // starts looking away
     medusaRoot = medusa;
 
-    add(medusa, "Base", &m_cylinder,
-        { 0.0f, 0.2f, 0.0f }, { 2.4f, 0.4f, 2.4f }, kDarkStone);
+    // --- her materials ----------------------------------------------------------
+    // Pale jade skin, emerald scales, and Egyptian gold set with turquoise and
+    // lapis - a gorgon dressed for this temple.
+    Material skin;
+    skin.ka = { 0.06f, 0.10f, 0.07f };  skin.kd = { 0.42f, 0.66f, 0.50f };
+    skin.ks = { 0.35f, 0.40f, 0.35f };  skin.shininess = 32.0f;
+    skin.emissive = { 0.02f, 0.05f, 0.03f };
+    Material tail = kSnake;
+    tail.kd *= glm::vec3(0.80f, 1.05f, 0.80f);
+    Material belly = skin;
+    belly.kd = { 0.78f, 0.74f, 0.52f };
+    Material gold = kGold;
+    gold.emissive = { 0.10f, 0.07f, 0.02f };
+    Material turquoise;
+    turquoise.ka = { 0.02f, 0.08f, 0.08f };  turquoise.kd = { 0.10f, 0.62f, 0.60f };
+    turquoise.ks = { 0.80f, 0.90f, 0.90f };  turquoise.shininess = 64.0f;
+    turquoise.emissive = { 0.02f, 0.12f, 0.12f };
+    Material lapis = turquoise;
+    lapis.kd = { 0.10f, 0.16f, 0.58f };  lapis.emissive = { 0.01f, 0.02f, 0.10f };
+    Material gem = turquoise;
+    gem.emissive = { 0.10f, 0.70f, 0.65f };
+    Material lips = skin;
+    lips.kd = { 0.50f, 0.10f, 0.14f };  lips.ks = { 0.6f, 0.4f, 0.4f };  lips.shininess = 48.0f;
+    Material brow = skin;
+    brow.kd = { 0.10f, 0.14f, 0.08f };
+    Material claw = skin;
+    claw.kd = { 0.20f, 0.24f, 0.16f };  claw.ks = { 0.6f, 0.6f, 0.6f };  claw.shininess = 64.0f;
 
-    // Coiled tail: three stacked, shrinking rings.
-    for (int i = 0; i < 3; ++i)
+    // --- the serpent tail ----------------------------------------------------------
+    // A coil on the floor, tip at her back, winding inward and rising into her
+    // waist. Overlapping ellipsoids laid along the curve, each stretched and
+    // turned along it, so they read as one smooth scaled body.
     {
-        const float t = static_cast<float>(i);
-        add(medusa, "Coil", &m_torus,
-            { 0.0f, 0.5f + t * 0.42f, 0.0f },
-            { 2.4f - t * 0.45f, 0.9f, 2.4f - t * 0.45f },
-            kStone);
+        constexpr int kCoil = 44;
+        std::vector<glm::vec3> path(kCoil);
+        std::vector<float> thick(kCoil);
+        constexpr float kTwoPi = 6.2831853f;
+        for (int i = 0; i < kCoil; ++i)
+        {
+            const float u = static_cast<float>(i) / static_cast<float>(kCoil - 1);   // tip -> waist
+            thick[i] = 0.12f + 0.52f * std::pow(u, 0.8f);
+            const float v = std::min(u / 0.72f, 1.0f);
+            const float angle = -1.5708f + v * kTwoPi * 1.55f;
+            if (u < 0.72f)
+            {
+                const float radius = 1.08f - 0.45f * v;
+                path[i] = { radius * std::cos(angle), 0.5f * thick[i] + 0.03f + 0.22f * v, radius * std::sin(angle) };
+            }
+            else
+            {
+                const float w = (u - 0.72f) / 0.28f;
+                const float radius = 0.63f * (1.0f - w);
+                path[i] = { radius * std::cos(angle + 0.9f * w), 0.6f + 1.25f * w,
+                            radius * std::sin(angle + 0.9f * w) };
+            }
+        }
+        for (int i = 0; i < kCoil; ++i)
+        {
+            const glm::vec3 ahead  = path[std::min(i + 1, kCoil - 1)];
+            const glm::vec3 behind = path[std::max(i - 1, 0)];
+            const glm::vec3 along = glm::normalize(ahead - behind);
+            const float step = 0.5f * glm::length(ahead - behind);
+            SceneNode* body = add(medusa, "Tail", &m_sphere, path[i],
+                                  { thick[i], thick[i] * 0.88f, std::max(step * 1.9f, thick[i]) }, tail);
+            body->rotation = { -glm::degrees(std::asin(glm::clamp(along.y, -1.0f, 1.0f))),
+                               glm::degrees(std::atan2(along.x, along.z)), 0.0f };
+            // A paler belly on the floor-lying coils.
+            if (path[i].y < 0.5f && i > 2)
+            {
+                SceneNode* under = add(medusa, "Belly", &m_sphere, path[i] - glm::vec3(0.0f, thick[i] * 0.18f, 0.0f),
+                                       { thick[i] * 0.86f, thick[i] * 0.6f, std::max(step * 1.8f, thick[i]) }, belly);
+                under->rotation = body->rotation;
+            }
+        }
+        // The tail's tip: a fine point.
+        const glm::vec3 tipDir = glm::normalize(path[0] - path[1]);
+        SceneNode* tip = add(medusa, "TailTip", &m_cone, path[0] + tipDir * 0.12f,
+                             { 0.11f, 0.3f, 0.11f }, tail);
+        // The cone points up its +Y: lay it along the tail.
+        tip->rotation = { 90.0f - glm::degrees(std::asin(glm::clamp(tipDir.y, -1.0f, 1.0f))),
+                          glm::degrees(std::atan2(tipDir.x, tipDir.z)), 0.0f };
     }
 
-    add(medusa, "Torso", &m_cylinder,
-        { 0.0f, 2.35f, 0.0f }, { 1.15f, 2.0f, 1.15f }, kStone);
-    add(medusa, "Shoulders", &m_sphere,
-        { 0.0f, 3.3f, 0.0f }, { 1.3f, 0.7f, 1.0f }, kStone);
+    // --- the body --------------------------------------------------------------------
+    add(medusa, "Hips",    &m_sphere,   { 0.0f, 1.90f, 0.0f },  { 0.95f, 0.55f, 0.78f }, tail);
+    add(medusa, "Belt",    &m_thinTorus, { 0.0f, 2.08f, 0.0f },  { 0.96f, 3.0f, 0.80f }, gold);
+    add(medusa, "BeltGem", &m_sphere,    { 0.0f, 2.08f, 0.41f }, { 0.14f, 0.14f, 0.08f }, gem);
+    add(medusa, "Waist",   &m_sphere,    { 0.0f, 2.40f, 0.0f },  { 0.78f, 0.95f, 0.62f }, skin);
+    add(medusa, "Chest",   &m_sphere,   { 0.0f, 2.92f, 0.02f }, { 1.12f, 0.92f, 0.78f }, skin);
+    add(medusa, "Neck",    &m_cylinder, { 0.0f, 3.50f, 0.0f },  { 0.32f, 0.42f, 0.32f }, skin);
+
+    // The broad collar - the Egyptian usekh: bands of gold, turquoise, lapis, gold.
+    // Flattened domes laid over her chest, each a little smaller and higher
+    // than the last, so their edges show as bands of colour round her neck.
+    add(medusa, "Collar",  &m_sphere, { 0.0f, 3.24f, 0.05f }, { 1.30f, 0.34f, 1.04f }, gold);
+    add(medusa, "CollarT", &m_sphere, { 0.0f, 3.27f, 0.05f }, { 1.10f, 0.32f, 0.90f }, turquoise);
+    add(medusa, "CollarL", &m_sphere, { 0.0f, 3.30f, 0.05f }, { 0.90f, 0.30f, 0.76f }, lapis);
+    add(medusa, "CollarG", &m_sphere, { 0.0f, 3.33f, 0.05f }, { 0.70f, 0.28f, 0.62f }, gold);
+
+    // --- the arms: reaching for him, with claws ----------------------------------------
+    for (int side = -1; side <= 1; side += 2)
+    {
+        const float sx = static_cast<float>(side);
+        add(medusa, "Shoulder", &m_sphere, { 0.62f * sx, 3.22f, 0.0f }, { 0.44f, 0.42f, 0.42f }, skin);
+
+        SceneNode* shoulder = medusa->createChild("ArmPivot");
+        shoulder->position = { 0.68f * sx, 3.18f, 0.04f };
+        shoulder->rotation = { -55.0f, 0.0f, 22.0f * sx };
+        add(shoulder, "UpperArm", &m_sphere,    { 0.0f, -0.42f, 0.0f }, { 0.30f, 0.98f, 0.30f }, skin);
+        add(shoulder, "ArmBand",  &m_thinTorus, { 0.0f, -0.28f, 0.0f }, { 0.31f, 3.0f, 0.31f }, gold);
+
+        SceneNode* elbow = shoulder->createChild("ElbowPivot");
+        elbow->position = { 0.0f, -0.84f, 0.0f };
+        elbow->rotation = { -38.0f, 0.0f, 0.0f };
+        add(elbow, "Elbow",    &m_sphere,    { 0.0f, 0.0f, 0.0f },   { 0.26f, 0.26f, 0.26f }, skin);
+        add(elbow, "Forearm",  &m_sphere,    { 0.0f, -0.40f, 0.0f }, { 0.25f, 0.92f, 0.25f }, skin);
+        add(elbow, "Bracelet", &m_thinTorus, { 0.0f, -0.70f, 0.0f }, { 0.27f, 5.0f, 0.27f }, gold);
+        add(elbow, "Hand",     &m_sphere,    { 0.0f, -0.92f, 0.03f }, { 0.26f, 0.32f, 0.14f }, skin);
+        for (int f = -1; f <= 1; ++f)
+        {
+            const float fx = static_cast<float>(f);
+            add(elbow, "Claw", &m_cone, { 0.075f * fx, -1.12f, 0.05f }, { 0.05f, 0.16f, 0.05f }, claw)
+                ->rotation = { 180.0f - 15.0f, 0.0f, 8.0f * fx };
+        }
+
+        m_medusaArms.push_back(shoulder);
+        m_medusaArmSides.push_back(sx);
+    }
 
     // --- the head: yaws toward the traveller in Phase 9 ---
     medusaHead = medusa->createChild("MedusaHead");
     medusaHead->position = { 0.0f, 3.85f, 0.0f };
 
-    add(medusaHead, "Skull", &m_sphere,
-        { 0.0f, 0.0f, 0.0f }, { 0.9f, 1.0f, 0.9f }, kStone);
+    add(medusaHead, "Skull", &m_sphere, { 0.0f, 0.0f, 0.0f },    { 0.80f, 1.02f, 0.84f }, skin);
+    add(medusaHead, "Chin",  &m_sphere, { 0.0f, -0.32f, 0.17f }, { 0.30f, 0.24f, 0.26f }, skin);
+    add(medusaHead, "Nose",  &m_sphere, { 0.0f, -0.04f, 0.42f }, { 0.10f, 0.16f, 0.10f }, skin);
+    add(medusaHead, "Lips",  &m_sphere, { 0.0f, -0.22f, 0.37f }, { 0.22f, 0.06f, 0.08f }, lips);
+    for (int side = -1; side <= 1; side += 2)
+    {
+        const float sx = static_cast<float>(side);
+        // Brows drawn down in a scowl.
+        add(medusaHead, "Brow", &m_cube, { 0.21f * sx, 0.20f, 0.40f }, { 0.22f, 0.04f, 0.06f }, brow)
+            ->rotation = { 0.0f, 0.0f, -18.0f * sx };
+        // Gold hoop earrings.
+        // Small gold hoops hanging below her ears, facing forward.
+        add(medusaHead, "Earring", &m_torus, { 0.40f * sx, -0.30f, 0.02f }, { 0.18f, 0.18f, 0.18f }, gold)
+            ->rotation = { 90.0f, 0.0f, 0.0f };
+    }
+    // A gold diadem with a glowing turquoise gem over her brow.
+    add(medusaHead, "Diadem",    &m_thinTorus, { 0.0f, 0.24f, 0.0f }, { 0.86f, 3.0f, 0.90f }, gold);
+    add(medusaHead, "DiademGem", &m_sphere, { 0.0f, 0.30f, 0.45f }, { 0.13f, 0.16f, 0.08f }, gem);
 
     // Eyes on the head's local +Z, which is what worldForward() reports and
     // what the Phase 9 spotlights will aim along.
@@ -405,40 +532,66 @@ void Scene::buildMedusa()
     }
 
     // --- snakes: the deepest hierarchy in the scene ---
-    // 7 snakes, each a chain of 4 segments. A segment is a child of the one
-    // below it, so bending one bends everything above it, and the whole head
-    // of snakes follows medusaHead's yaw automatically.
-    constexpr int kSnakeCount = 7;
-    constexpr int kSegments   = 4;
+    // 12 snakes in two rings, each a chain of 5 segments. A segment is a child
+    // of the one below it, so bending one bends everything above it, and the
+    // whole head of snakes follows medusaHead's yaw automatically. None grow
+    // over her face (local +Z is angle 90 here), so her eyes stay clear.
+    constexpr int kSegments = 5;
+    struct SnakeSpot { float angle, radius, height, lean; };
+    const SnakeSpot spots[12] = {
+        {  20.0f, 0.40f, 0.20f, 30.0f }, { 155.0f, 0.40f, 0.20f, 30.0f },
+        { 200.0f, 0.42f, 0.18f, 26.0f }, { 240.0f, 0.42f, 0.16f, 24.0f },
+        { 270.0f, 0.42f, 0.16f, 22.0f }, { 300.0f, 0.42f, 0.16f, 24.0f },
+        { 340.0f, 0.42f, 0.18f, 26.0f }, {  50.0f, 0.30f, 0.38f, 14.0f },
+        { 130.0f, 0.30f, 0.38f, 14.0f }, { 210.0f, 0.26f, 0.42f, 10.0f },
+        { 270.0f, 0.24f, 0.44f,  8.0f }, { 330.0f, 0.26f, 0.42f, 10.0f },
+    };
+    const glm::vec3 greens[3] = { { 1.0f, 1.0f, 1.0f }, { 0.75f, 1.1f, 0.85f }, { 1.15f, 1.05f, 0.7f } };
+    Material snakeEye;
+    snakeEye.ka = { 0.0f, 0.0f, 0.0f };  snakeEye.kd = { 0.2f, 0.15f, 0.0f };  snakeEye.ks = { 0.0f, 0.0f, 0.0f };
+    snakeEye.emissive = glm::vec3(1.0f, 0.75f, 0.10f) * 1.6f;
+    Material tongue = lips;
+    tongue.kd = { 0.75f, 0.08f, 0.12f };  tongue.emissive = { 0.15f, 0.0f, 0.02f };
 
-    for (int s = 0; s < kSnakeCount; ++s)
+    for (int s = 0; s < 12; ++s)
     {
-        const float angle = (static_cast<float>(s) / kSnakeCount) * 360.0f;
-        const float rad   = glm::radians(angle);
+        const SnakeSpot& spot = spots[s];
+        const float rad = glm::radians(spot.angle);
+        Material scales = kSnake;
+        scales.kd *= greens[s % 3];
 
         SceneNode* root = medusaHead->createChild("SnakeRoot");
-        root->position = { 0.36f * std::cos(rad), 0.34f, 0.36f * std::sin(rad) };
-        root->rotation = { 18.0f, angle, 0.0f };
+        root->position = { spot.radius * std::cos(rad), spot.height, spot.radius * std::sin(rad) };
+        root->rotation = { spot.lean, spot.angle, 0.0f };
 
         SceneNode* parent = root;
         for (int seg = 0; seg < kSegments; ++seg)
         {
             SceneNode* segment = parent->createChild("SnakeSegment");
-            segment->position = { 0.0f, (seg == 0) ? 0.16f : 0.3f, 0.0f };
+            segment->position = { 0.0f, (seg == 0) ? 0.14f : 0.27f, 0.0f };
             segment->rotation = { 12.0f, 0.0f, 0.0f };
 
             // Mesh child, so the segment node itself stays a clean pivot and
             // its scale does not cascade to the next segment.
-            const float taper = 1.0f - 0.13f * static_cast<float>(seg);
+            const float taper = 1.0f - 0.12f * static_cast<float>(seg);
             add(segment, "SnakeBody", &m_cylinder,
-                { 0.0f, 0.15f, 0.0f },
-                { 0.17f * taper, 0.32f, 0.17f * taper },
-                kSnake);
+                { 0.0f, 0.14f, 0.0f }, { 0.15f * taper, 0.30f, 0.15f * taper }, scales);
+            add(segment, "SnakeJoint", &m_sphere,
+                { 0.0f, 0.0f, 0.0f }, { 0.15f * taper, 0.15f * taper, 0.15f * taper }, scales);
 
             if (seg == kSegments - 1)
             {
                 add(segment, "SnakeHead", &m_sphere,
-                    { 0.0f, 0.34f, 0.06f }, { 0.2f, 0.18f, 0.28f }, kSnake);
+                    { 0.0f, 0.32f, 0.07f }, { 0.19f, 0.16f, 0.28f }, scales);
+                for (int e = -1; e <= 1; e += 2)
+                {
+                    add(segment, "SnakeEye", &m_sphere, { 0.07f * static_cast<float>(e), 0.37f, 0.15f },
+                        { 0.045f, 0.045f, 0.045f }, snakeEye);
+                    // A forked tongue, flicking forward.
+                    add(segment, "Tongue", &m_cone, { 0.018f * static_cast<float>(e), 0.30f, 0.28f },
+                        { 0.018f, 0.16f, 0.018f }, tongue)
+                        ->rotation = { 90.0f, 0.0f, 0.0f };
+                }
             }
 
             snakeSegments.push_back(segment);
@@ -1117,6 +1270,15 @@ void Scene::update(float time, float deltaTime)
             12.0f + amplitudeX * std::sin(time * speed + phase);
         snakeSegments[i]->rotation.z =
             amplitudeZ * std::sin(time * speed * 0.72f + phase * 1.4f);
+    }
+
+    // Her arms sway as she hunts, and reach further for him when roused.
+    for (std::size_t i = 0; i < m_medusaArms.size(); ++i)
+    {
+        const float side = m_medusaArmSides[i];
+        m_medusaArms[i]->rotation.x = -55.0f - 20.0f * agitation
+                                    + (6.0f + 6.0f * agitation) * std::sin(time * (1.3f + 1.5f * agitation) + side);
+        m_medusaArms[i]->rotation.z = (22.0f + 4.0f * std::sin(time * 0.9f + side * 1.7f)) * side;
     }
 
     // --- composite hinge: the lid swings on its rim, not its centre --------
@@ -2986,17 +3148,29 @@ void Scene::uploadRayTracing(const Shader& shader) const
 {
     const bool on = rayTracing && m_gardenRoot != nullptr && m_gardenRoot->visible && m_poolWater != nullptr;
     shader.setInt("uRtEnabled", on ? 1 : 0);
-    if (!on) { m_rtBoxes = 0; m_rtBlobs = 0; return; }
+    if (!on) { m_rtShapes = 0; return; }
 
-    // Every visible shape in the garden becomes a world-space box, or an
-    // ellipsoid if it is a sphere - with its current colour, alive or dead.
-    struct Shape { glm::vec3 lo, hi, kd, glow; float key; };
-    std::vector<Shape> boxes, blobs;
+    // Every visible shape in the garden goes to the shader exactly as it is
+    // drawn: which unit shape it is, the inverse of its world matrix, and its
+    // current colour - alive or dead.
+    struct Shape { glm::mat4 inverse; glm::vec4 kd, glow; float key; };
+    std::vector<Shape> shapes;
 
     std::function<void(const SceneNode&)> walk = [&](const SceneNode& n)
     {
         if (!n.visible) { return; }
-        if (n.mesh != nullptr && &n != m_poolWater && !n.material.sky && n.material.opacity > 0.3f)
+
+        int type = -1;
+        float tube = 0.0f;
+        if      (n.mesh == &m_cube)      { type = 0; }
+        else if (n.mesh == &m_sphere)    { type = 1; }
+        else if (n.mesh == &m_cylinder)  { type = 2; }
+        else if (n.mesh == &m_cone)      { type = 3; }
+        else if (n.mesh == &m_torus)     { type = 4; tube = 0.14f; }
+        else if (n.mesh == &m_thinTorus) { type = 4; tube = 0.035f; }
+
+        if (type >= 0 && &n != m_poolWater && !n.material.sky && n.material.opacity > 0.3f
+            && std::fabs(glm::determinant(glm::mat3(n.world()))) > 1e-9f)
         {
             glm::vec3 lo(1e9f), hi(-1e9f);
             for (int c = 0; c < 8; ++c)
@@ -3026,9 +3200,8 @@ void Scene::uploadRayTracing(const Shader& shader) const
                 float key = glm::length(off) - 0.5f * biggest;
                 // The moon, the sun and the dunes: far, but always in the mirror.
                 if (biggest > 3.0f && (glow.x + glow.y + glow.z > 0.5f || size.x > 20.0f)) { key = -1000.0f; }
-                const Shape s{ lo, hi, kd, glow, key };
-                if (n.mesh == &m_sphere) { blobs.push_back(s); }
-                else                     { boxes.push_back(s); }
+                shapes.push_back({ glm::inverse(n.world()), glm::vec4(kd, static_cast<float>(type)),
+                                   glm::vec4(glow, tube), key });
             }
         }
         for (const std::unique_ptr<SceneNode>& child : n.children()) { walk(*child); }
@@ -3036,33 +3209,20 @@ void Scene::uploadRayTracing(const Shader& shader) const
     walk(*m_gardenRoot);
     if (traveller != nullptr) { walk(*traveller); }
 
-    auto nearest = [](std::vector<Shape>& v, std::size_t most)
-    {
-        std::sort(v.begin(), v.end(), [](const Shape& a, const Shape& b) { return a.key < b.key; });
-        if (v.size() > most) { v.resize(most); }
-    };
-    nearest(boxes, 48);
-    nearest(blobs, 40);
+    // The nearest 56 to the pool: the ones its mirror can actually show.
+    std::sort(shapes.begin(), shapes.end(), [](const Shape& x, const Shape& y) { return x.key < y.key; });
+    if (shapes.size() > 56) { shapes.resize(56); }
 
-    m_rtBoxes = static_cast<int>(boxes.size());
-    m_rtBlobs = static_cast<int>(blobs.size());
-    shader.setInt("uRtBoxCount", m_rtBoxes);
-    shader.setInt("uRtBlobCount", m_rtBlobs);
-    for (int i = 0; i < m_rtBoxes; ++i)
+    m_rtShapes = static_cast<int>(shapes.size());
+    shader.setInt("uRtCount", m_rtShapes);
+    for (int i = 0; i < m_rtShapes; ++i)
     {
         const std::string k = "[" + std::to_string(i) + "]";
-        shader.setVec3("uRtBoxMin" + k, boxes[i].lo);
-        shader.setVec3("uRtBoxMax" + k, boxes[i].hi);
-        shader.setVec3("uRtBoxKd" + k, boxes[i].kd + boxes[i].glow);
+        shader.setMat4("uRtInverse" + k, shapes[i].inverse);
+        shader.setVec4("uRtKd" + k, shapes[i].kd);
+        shader.setVec4("uRtGlow" + k, shapes[i].glow);
     }
-    for (int i = 0; i < m_rtBlobs; ++i)
-    {
-        const std::string k = "[" + std::to_string(i) + "]";
-        shader.setVec3("uRtBlobCentre" + k, 0.5f * (blobs[i].lo + blobs[i].hi));
-        shader.setVec3("uRtBlobRadii" + k, glm::max(0.5f * (blobs[i].hi - blobs[i].lo), glm::vec3(0.01f)));
-        shader.setVec3("uRtBlobKd" + k, blobs[i].kd);
-        shader.setVec3("uRtBlobGlow" + k, blobs[i].glow);
-    }
+    shader.setVec3("uRtSunPos", sunPosition());
 
     // The light the traced surfaces see: the same garden light the rest of
     // the scene is lit by - moonlight, turning to warm sunlight at dawn.

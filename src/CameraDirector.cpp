@@ -140,8 +140,10 @@ CameraDirector::Shot CameraDirector::shotFor(TrialState state) const
             // ...and last, low across the pool, so the sun, the palms and the
             // wall shine in its ray-traced reflection.
             {
-                const glm::vec3 eye(1.6f, 1.5f, Tuning::kGardenBackZ - 0.9f);
-                const glm::vec3 look(-0.3f, 0.6f, Tuning::kGardenBackZ - 7.5f);
+                // Low and tilted down, so the whole upside-down ankh fits in
+                // the water below the real one.
+                const glm::vec3 eye(1.6f, 1.8f, Tuning::kGardenBackZ - 0.9f);
+                const glm::vec3 look(-0.3f, -0.13f, Tuning::kGardenBackZ - 8.4f);
                 const glm::vec3 d = eye - look;
                 const float distance = glm::length(d);
                 return { look, distance, glm::degrees(std::atan2(d.z, d.x)),

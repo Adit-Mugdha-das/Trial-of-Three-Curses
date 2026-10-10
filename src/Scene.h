@@ -139,8 +139,7 @@ public:
     // The garden pool's reflections are ray traced in the shader against the
     // garden's own shapes, sent up each frame. Z toggles it.
     bool rayTracing = true;
-    int  rayTracedBoxes() const { return m_rtBoxes; }
-    int  rayTracedBlobs() const { return m_rtBlobs; }
+    int  rayTracedShapes() const { return m_rtShapes; }
     glm::vec3 poolCentre() const { return m_poolCentre; }
     static constexpr float kPoolRadius = 2.35f;
     static constexpr float kWaterLevel = 0.07f;
@@ -363,6 +362,10 @@ private:
 
     // Per-segment phase offsets, so the snakes do not writhe in lockstep.
     std::vector<float> m_snakePhases;
+
+    // Medusa's arms: shoulder pivots that sway, and reach further when she is roused.
+    std::vector<SceneNode*> m_medusaArms;
+    std::vector<float>      m_medusaArmSides;
     std::vector<float> m_shinePhases;
 
     // Eased current values chasing the *Target fields above.
@@ -435,8 +438,7 @@ private:
     SceneNode* m_gardenRoot = nullptr;
     SceneNode* m_poolWater = nullptr;
     glm::vec3  m_poolCentre{ 0.0f };
-    mutable int m_rtBoxes = 0;
-    mutable int m_rtBlobs = 0;
+    mutable int m_rtShapes = 0;
     void uploadRayTracing(const Shader& shader) const;
     std::vector<SceneNode*> m_boatLampNodes;
     std::vector<SceneNode*> m_oarBlades;

@@ -10,6 +10,7 @@ void Material::upload(const Shader& shader) const
     shader.setVec3("uMaterial.ks", ks);
     shader.setVec3("uMaterial.emissive", emissive);
     shader.setFloat("uMaterial.shininess", shininess);
+    shader.setFloat("uVertexShininess", shininess);     // the same value, for Gouraud's vertex path
     shader.setVec2("uMaterial.uvScale", uvScale);
     shader.setFloat("uMaterial.opacity", opacity);
 

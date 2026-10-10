@@ -8,6 +8,10 @@
 in vec2 vUV;
 
 uniform sampler2D uScene;
+uniform sampler2D uAO;          // ambient occlusion, already blurred
+uniform float uAOStrength;      // 0 = off
+uniform sampler2D uBloom;       // the bright parts, blurred
+uniform float uBloomStrength;   // 0 = off
 
 uniform float uDesaturate;   // 0 = full colour, 1 = fully grey
 uniform float uVignette;     // 0 = none, 1 = heavy corner darkening
@@ -19,6 +23,28 @@ out vec4 FragColor;
 void main()
 {
     vec3 color = texture(uScene, vUV).rgb;
+
+    // Contact shading first: corners, creases and the ground under things.
+    if (uAOStrength > 0.0)
+    {
+        color *= mix(1.0, texture(uAO, vUV).r, uAOStrength);
+    }
+
+    // Light spilling from the brightest things. Screen-blended rather than
+    // added, so a glow over a bright wall cannot burn it out to white.
+    if (uBloomStrength > 0.0)
+    {
+        vec3 glow = texture(uBloom, vUV).rgb * uBloomStrength;
+        color = 1.0 - (1.0 - color) * (1.0 - glow);
+    }
+
+    // A gentle grade: a touch more contrast through the mid-tones, and a
+    // little more colour - the flat look of raw shading, lifted.
+    vec3 curved = color * color * (3.0 - 2.0 * color);
+    color = mix(color, curved, 0.22);
+    float grey = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color = mix(vec3(grey), color, 1.12);
+    color = clamp(color, 0.0, 1.0);
 
     // Rec. 709 luma weights, not a flat average: the eye is far more
     // sensitive to green than to blue, and averaging the channels makes
